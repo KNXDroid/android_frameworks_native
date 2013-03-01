@@ -2470,7 +2470,10 @@ void EventHub::openDeviceLocked(const std::string& devicePath) {
 
         // 'Q' key support = cheap test of whether this is an alpha-capable kbd
         if (device->hasKeycodeLocked(AKEYCODE_Q)) {
-            device->classes |= InputDeviceClass::ALPHAKEY;
+            if ((device->identifier.name != "AT Translated Set 2 keyboard") ||
+                    !property_get_bool("ro.ignore_atkbd", 0)) {
+                device->classes |= InputDeviceClass::ALPHAKEY;
+            }
         }
 
         // See if this device has a D-pad.
