@@ -465,7 +465,6 @@ void OutputLayer::writeOutputDependentGeometryStateToHWC(HWC2::Layer* hwcLayer,
         z_udfps = getUdfpsZOrder(z, false);
     } else if (strncmp(getLayerFE().getDebugName(), UDFPS_DIM_LAYER_NAME,
                        strlen(UDFPS_DIM_LAYER_NAME)) == 0) {
-        z_udfps = getUdfpsDimZOrder(z);
     } else if (strncmp(getLayerFE().getDebugName(), UDFPS_TOUCHED_LAYER_NAME,
                        strlen(UDFPS_TOUCHED_LAYER_NAME)) == 0) {
         z_udfps = getUdfpsZOrder(z, true);

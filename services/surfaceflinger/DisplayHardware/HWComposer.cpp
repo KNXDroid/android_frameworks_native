@@ -45,14 +45,14 @@
 #include "HWC2.h"
 
 #define LOG_HWC_DISPLAY_ERROR(hwcDisplayId, msg) \
-    ALOGE("%s failed for HWC display %" PRIu64 ": %s", __FUNCTION__, hwcDisplayId, msg)
+   // ALOGE("%s failed for HWC display %" PRIu64 ": %s", __FUNCTION__, hwcDisplayId, msg)
 
 #define LOG_DISPLAY_ERROR(displayId, msg) \
-    ALOGE("%s failed for display %s: %s", __FUNCTION__, to_string(displayId).c_str(), msg)
+  //  ALOGE("%s failed for display %s: %s", __FUNCTION__, to_string(displayId).c_str(), msg)
 
-#define LOG_HWC_ERROR(what, error, displayId)                          \
+#define LOG_HWC_ERROR(what, error, displayId)  /*                        \
     ALOGE("%s: %s failed for display %s: %s (%d)", __FUNCTION__, what, \
-          to_string(displayId).c_str(), to_string(error).c_str(), static_cast<int32_t>(error))
+          to_string(displayId).c_str(), to_string(error).c_str(), static_cast<int32_t>(error))*/
 
 #define RETURN_IF_INVALID_DISPLAY(displayId, ...)            \
     do {                                                     \
