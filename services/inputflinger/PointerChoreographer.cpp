@@ -367,7 +367,8 @@ void PointerChoreographer::processTouchscreenAndStylusEventLocked(const NotifyMo
     const uint8_t actionIndex = MotionEvent::getActionIndex(args.action);
     std::array<uint32_t, MAX_POINTER_ID + 1> idToIndex;
     BitSet32 idBits;
-    if (maskedAction != AMOTION_EVENT_ACTION_UP && maskedAction != AMOTION_EVENT_ACTION_CANCEL) {
+    if (maskedAction != AMOTION_EVENT_ACTION_UP && maskedAction != AMOTION_EVENT_ACTION_CANCEL &&
+        maskedAction != AMOTION_EVENT_ACTION_HOVER_EXIT) {
         for (size_t i = 0; i < args.getPointerCount(); i++) {
             if (maskedAction == AMOTION_EVENT_ACTION_POINTER_UP && actionIndex == i) {
                 continue;

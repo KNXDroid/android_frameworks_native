@@ -830,15 +830,20 @@ TEST_F(PointerChoreographerTest, TouchSetsSpots) {
     pc->assertSpotCount(DISPLAY_ID, 0);
 }
 
+/**
+ * In this test, we simulate the complete event of the stylus approaching and clicking on the
+ * screen, and then leaving the screen. We should ensure that spots are displayed correctly.
+ */
 TEST_F(PointerChoreographerTest, TouchSetsSpotsForStylusEvent) {
     mChoreographer.setShowTouchesEnabled(true);
+    mChoreographer.setStylusPointerIconEnabled(false);
     mChoreographer.notifyInputDevicesChanged(
             {/*id=*/0,
              {generateTestDeviceInfo(DEVICE_ID, AINPUT_SOURCE_TOUCHSCREEN | AINPUT_SOURCE_STYLUS,
                                      DISPLAY_ID)}});
 
-    // Emit down event with stylus properties.
-    mChoreographer.notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_DOWN,
+    // First, the stylus begin to approach the screen.
+    mChoreographer.notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_HOVER_ENTER,
                                                   AINPUT_SOURCE_TOUCHSCREEN | AINPUT_SOURCE_STYLUS)
                                         .pointer(STYLUS_POINTER)
                                         .deviceId(DEVICE_ID)
@@ -846,6 +851,72 @@ TEST_F(PointerChoreographerTest, TouchSetsSpotsForStylusEvent) {
                                         .build());
     auto pc = assertPointerControllerCreated(ControllerType::TOUCH);
     pc->assertSpotCount(DISPLAY_ID, 1);
+
+    mChoreographer.notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_HOVER_MOVE,
+                                                  AINPUT_SOURCE_TOUCHSCREEN | AINPUT_SOURCE_STYLUS)
+                                        .pointer(STYLUS_POINTER)
+                                        .deviceId(DEVICE_ID)
+                                        .displayId(DISPLAY_ID)
+                                        .build());
+    pc->assertSpotCount(DISPLAY_ID, 1);
+
+    mChoreographer.notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_HOVER_EXIT,
+                                                  AINPUT_SOURCE_TOUCHSCREEN | AINPUT_SOURCE_STYLUS)
+                                        .pointer(STYLUS_POINTER)
+                                        .deviceId(DEVICE_ID)
+                                        .displayId(DISPLAY_ID)
+                                        .build());
+    pc->assertSpotCount(DISPLAY_ID, 0);
+
+    // Now, use stylus touch the screen.
+    mChoreographer.notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_DOWN,
+                                                  AINPUT_SOURCE_TOUCHSCREEN | AINPUT_SOURCE_STYLUS)
+                                        .pointer(STYLUS_POINTER)
+                                        .deviceId(DEVICE_ID)
+                                        .displayId(DISPLAY_ID)
+                                        .build());
+    pc->assertSpotCount(DISPLAY_ID, 1);
+
+    mChoreographer.notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_MOVE,
+                                                  AINPUT_SOURCE_TOUCHSCREEN | AINPUT_SOURCE_STYLUS)
+                                        .pointer(STYLUS_POINTER)
+                                        .deviceId(DEVICE_ID)
+                                        .displayId(DISPLAY_ID)
+                                        .build());
+    pc->assertSpotCount(DISPLAY_ID, 1);
+
+    mChoreographer.notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_UP,
+                                                  AINPUT_SOURCE_TOUCHSCREEN | AINPUT_SOURCE_STYLUS)
+                                        .pointer(STYLUS_POINTER)
+                                        .deviceId(DEVICE_ID)
+                                        .displayId(DISPLAY_ID)
+                                        .build());
+    pc->assertSpotCount(DISPLAY_ID, 0);
+
+    // Then, the stylus start leave from the screen.
+    mChoreographer.notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_HOVER_ENTER,
+                                                  AINPUT_SOURCE_TOUCHSCREEN | AINPUT_SOURCE_STYLUS)
+                                        .pointer(STYLUS_POINTER)
+                                        .deviceId(DEVICE_ID)
+                                        .displayId(DISPLAY_ID)
+                                        .build());
+    pc->assertSpotCount(DISPLAY_ID, 1);
+
+    mChoreographer.notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_HOVER_MOVE,
+                                                  AINPUT_SOURCE_TOUCHSCREEN | AINPUT_SOURCE_STYLUS)
+                                        .pointer(STYLUS_POINTER)
+                                        .deviceId(DEVICE_ID)
+                                        .displayId(DISPLAY_ID)
+                                        .build());
+    pc->assertSpotCount(DISPLAY_ID, 1);
+
+    mChoreographer.notifyMotion(MotionArgsBuilder(AMOTION_EVENT_ACTION_HOVER_EXIT,
+                                                  AINPUT_SOURCE_TOUCHSCREEN | AINPUT_SOURCE_STYLUS)
+                                        .pointer(STYLUS_POINTER)
+                                        .deviceId(DEVICE_ID)
+                                        .displayId(DISPLAY_ID)
+                                        .build());
+    pc->assertSpotCount(DISPLAY_ID, 0);
 }
 
 TEST_F(PointerChoreographerTest, TouchSetsSpotsForTwoDisplays) {
