@@ -1539,7 +1539,7 @@ void RefreshRateSelector::constructAvailableRefreshRates() {
         // Reset and store idle refresh rate
         mIdleRefreshRateModeIt = mDisplayModes.end();
         for (auto it = mDisplayModes.begin(); it != mDisplayModes.end(); ++it) {
-            if (isApproxEqual(it->second->getFps(), 60_Hz)) {
+            if (isApproxEqual(it->second->getVsyncRate(), 60_Hz)) {
                 mIdleRefreshRateModeIt = it;
                 ALOGV("idleRefreshRate set!");
                 break;
