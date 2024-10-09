@@ -427,6 +427,8 @@ void Scheduler::onHdcpLevelsChanged(Cycle cycle, PhysicalDisplayId displayId,
     eventThreadFor(cycle).onHdcpLevelsChanged(displayId, connectedLevel, maxLevel);
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-value" // b/369277774
 bool Scheduler::onDisplayModeChanged(PhysicalDisplayId displayId, const FrameRateMode& mode) {
     const bool isPacesetter =
             FTL_FAKE_GUARD(kMainThreadContext,
@@ -447,6 +449,7 @@ bool Scheduler::onDisplayModeChanged(PhysicalDisplayId displayId, const FrameRat
 
     return isPacesetter;
 }
+#pragma clang diagnostic pop
 
 void Scheduler::emitModeChangeIfNeeded() {
     if (!mPolicy.modeOpt || !mPolicy.emittedModeOpt) {
@@ -484,6 +487,8 @@ void Scheduler::setDuration(Cycle cycle, std::chrono::nanoseconds workDuration,
     }
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-value" // b/369277774
 void Scheduler::updatePhaseConfiguration(PhysicalDisplayId displayId, Fps refreshRate) {
     const bool isPacesetter =
             FTL_FAKE_GUARD(kMainThreadContext,
@@ -495,6 +500,7 @@ void Scheduler::updatePhaseConfiguration(PhysicalDisplayId displayId, Fps refres
     setVsyncConfig(mVsyncModulator->setVsyncConfigSet(mVsyncConfiguration->getCurrentConfigs()),
                    refreshRate.getPeriod());
 }
+#pragma clang diagnostic pop
 
 void Scheduler::setActiveDisplayPowerModeForRefreshRateStats(hal::PowerMode powerMode) {
     mRefreshRateStats->setPowerMode(powerMode);
@@ -918,6 +924,8 @@ void Scheduler::dumpVsync(std::string& out) const {
     }
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-value" // b/369277774
 void Scheduler::updateFrameRateOverrides(GlobalSignals consideredSignals, Fps displayRefreshRate) {
     const bool changed = (std::scoped_lock(mPolicyLock),
                           updateFrameRateOverridesLocked(consideredSignals, displayRefreshRate));
@@ -926,6 +934,7 @@ void Scheduler::updateFrameRateOverrides(GlobalSignals consideredSignals, Fps di
         onFrameRateOverridesChanged();
     }
 }
+#pragma clang diagnostic pop
 
 bool Scheduler::updateFrameRateOverridesLocked(GlobalSignals consideredSignals,
                                                Fps displayRefreshRate) {
