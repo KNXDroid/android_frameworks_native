@@ -135,6 +135,9 @@ cc_library_static {
         "EGL/MultifileBlobCache.cpp",
     ],
     export_include_dirs: ["EGL"],
+    shared_libs: [
+        "libz",
+    ],
 }
 
 cc_library_shared {
@@ -173,6 +176,7 @@ cc_library_shared {
         "libutils",
         "libSurfaceFlingerProp",
         "libunwindstack",
+        "libz",
     ],
     static_libs: [
         "libEGL_getProcAddress",
@@ -203,6 +207,7 @@ cc_test {
     ],
     shared_libs: [
         "libutils",
+        "libz",
     ],
 }
 
