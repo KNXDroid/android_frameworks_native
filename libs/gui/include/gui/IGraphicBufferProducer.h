@@ -403,7 +403,7 @@ public:
         uint64_t nextFrameNumber{0};
         FrameEventHistoryDelta frameTimestamps;
         bool bufferReplaced{false};
-        int maxBufferCount{0};
+        int maxBufferCount{BufferQueueDefs::NUM_BUFFER_SLOTS};
         status_t result{NO_ERROR};
     };
 
