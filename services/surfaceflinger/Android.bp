@@ -34,6 +34,7 @@ cc_defaults {
         "-Wunused",
         "-Wunreachable-code",
         "-Wconversion",
+        "-Wno-unused-lambda-capture",
         "-DANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION",
     ],
 }
