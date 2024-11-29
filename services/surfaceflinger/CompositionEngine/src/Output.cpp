@@ -851,7 +851,7 @@ void Output::writeCompositionState(const compositionengine::CompositionRefreshAr
                                              return refreshArgs.frameTargets.get(id);
                                          })) {
         editState().earliestPresentTime = frameTargetPtrOpt->get()->earliestPresentTime();
-        editState().expectedPresentTime = frameTargetPtrOpt->get()->scheduledPresentTime().ns();
+        editState().expectedPresentTime = frameTargetPtrOpt->get()->expectedPresentTime().ns();
     }
     editState().frameInterval = refreshArgs.frameInterval;
     editState().powerCallback = refreshArgs.powerCallback;
