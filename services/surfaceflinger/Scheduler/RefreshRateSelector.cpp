@@ -960,7 +960,7 @@ auto RefreshRateSelector::getFrameRateOverrides(const std::vector<LayerRequireme
     const auto* policyPtr = getCurrentPolicyLocked();
     // We don't want to run lower than 30fps
     // TODO(b/297600226): revise this for dVRR
-    const Fps minFrameRate = std::max(policyPtr->appRequestRanges.render.min, 30_Hz, isApproxLess);
+    const Fps minFrameRate = std::max(policyPtr->appRequestRanges.render.min, 10_Hz, isApproxLess);
 
     using fps_approx_ops::operator/;
     const unsigned numMultiples = displayRefreshRate / minFrameRate;
