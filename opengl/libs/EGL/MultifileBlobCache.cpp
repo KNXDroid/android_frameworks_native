@@ -351,7 +351,7 @@ void MultifileBlobCache::set(const void* key, EGLsizeiANDROID keySize, const voi
 
         // Look up the existing size (this must be done before trackEntry)
         size_t oldFileSize = getFileSize(entryHash);
-        ALOGV("SET: Replacing %u. Old size (%lu) New size (%lu)", entryHash, oldFileSize, fileSize);
+        //ALOGV("SET: Replacing %u. Old size (%lu) New size (%lu)", entryHash, oldFileSize, fileSize);
 
         // Then decrement the cache
         decreaseTotalCacheSize(oldFileSize);
