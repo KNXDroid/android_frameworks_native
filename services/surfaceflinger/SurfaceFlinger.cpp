@@ -815,6 +815,14 @@ void chooseRenderEngineType(renderengine::RenderEngineCreationArgs::Builder& bui
     } else if (strcmp(prop, "skiavkthreaded") == 0) {
         builder.setThreaded(renderengine::RenderEngine::Threaded::YES)
                 .setGraphicsApi(renderengine::RenderEngine::GraphicsApi::VK);
+    } else if (strcmp(prop, "graphite") == 0) {
+        const auto kVulkan = renderengine::RenderEngine::GraphicsApi::VK;
+        const bool useGraphite = true;
+        const bool useVulkan = true;
+
+        builder.setSkiaBackend(useGraphite ? renderengine::RenderEngine::SkiaBackend::GRAPHITE
+        : renderengine::RenderEngine::SkiaBackend::GANESH);
+        builder.setGraphicsApi(useVulkan ? kVulkan : renderengine::RenderEngine::GraphicsApi::GL);
     } else {
         const auto kVulkan = renderengine::RenderEngine::GraphicsApi::VK;
 // TODO: b/341728634 - Clean up conditional compilation.
