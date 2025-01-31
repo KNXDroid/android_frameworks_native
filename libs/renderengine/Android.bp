@@ -133,6 +133,7 @@ cc_library_static {
         "-fvisibility=hidden",
         "-Werror=format",
         "-Wno-unused-parameter",
+        "-O3",
     ],
     srcs: [
         ":librenderengine_sources",
@@ -148,6 +149,8 @@ cc_library_static {
     lto: {
         thin: true,
     },
+    whole_program_vtables: true, // Requires ThinLTO
+    lto_Instr100: true,
 }
 
 cc_library_static {
