@@ -2383,20 +2383,12 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
     using Changes = frontend::RequestedLayerState::Changes;
     SFTRACE_CALL();
     frontend::Update update;
+
     if (flushTransactions) {
         SFTRACE_NAME("TransactionHandler:flushTransactions");
-        // Locking:
-        // 1. to prevent onHandleDestroyed from being called while the state lock is held,
-        // we must keep a copy of the transactions (specifically the composer
-        // states) around outside the scope of the lock.
-        // 2. Transactions and created layers do not share a lock. To prevent applying
-        // transactions with layers still in the createdLayer queue, collect the transactions
-        // before committing the created layers.
-        // 3. Transactions can only be flushed after adding layers, since the layer can be a newly
-        // created one
         mTransactionHandler.collectTransactions();
+
         {
-            // TODO(b/238781169) lockless queue this and keep order.
             std::scoped_lock<std::mutex> lock(mCreatedLayersLock);
             update.legacyLayers = std::move(mCreatedLayers);
             mCreatedLayers.clear();
@@ -2410,68 +2402,57 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
 
         mLayerLifecycleManager.addLayers(std::move(update.newLayers));
         update.transactions = mTransactionHandler.flushTransactions();
+
         if (mTransactionTracing) {
             mTransactionTracing->addCommittedTransactions(ftl::to_underlying(vsyncId), frameTimeNs,
                                                           update, mFrontEndDisplayInfos,
                                                           mFrontEndDisplayInfosChanged);
         }
+
         mLayerLifecycleManager.applyTransactions(update.transactions);
         mLayerLifecycleManager.onHandlesDestroyed(update.destroyedHandles);
+
         for (auto& legacyLayer : update.legacyLayers) {
             mLegacyLayers[legacyLayer->sequence] = legacyLayer;
         }
+
         mLayerHierarchyBuilder.update(mLayerLifecycleManager);
     }
 
-    // Keep a copy of the drawing state (that is going to be overwritten
-    // by commitTransactionsLocked) outside of mStateLock so that the side
-    // effects of the State assignment don't happen with mStateLock held,
-    // which can cause deadlocks.
     State drawingState(mDrawingState);
     Mutex::Autolock lock(mStateLock);
-    bool mustComposite = false;
-    mustComposite |= applyAndCommitDisplayTransactionStatesLocked(update.transactions);
+    bool mustComposite = applyAndCommitDisplayTransactionStatesLocked(update.transactions);
 
     {
         SFTRACE_NAME("LayerSnapshotBuilder:update");
-        frontend::LayerSnapshotBuilder::Args
-                args{.root = mLayerHierarchyBuilder.getHierarchy(),
-                     .layerLifecycleManager = mLayerLifecycleManager,
-                     .includeMetadata = mCompositionEngine->getFeatureFlags().test(
-                             compositionengine::Feature::kSnapshotLayerMetadata),
-                     .displays = mFrontEndDisplayInfos,
-                     .displayChanges = mFrontEndDisplayInfosChanged,
-                     .globalShadowSettings = mDrawingState.globalShadowSettings,
-                     .supportsBlur = mSupportsBlur,
-                     .forceFullDamage = mForceFullDamage,
-                     .supportedLayerGenericMetadata =
-                             getHwComposer().getSupportedLayerGenericMetadata(),
-                     .genericLayerMetadataKeyMap = getGenericLayerMetadataKeyMap(),
-                     .skipRoundCornersWhenProtected =
-                             !getRenderEngine().supportsProtectedContent()};
+        frontend::LayerSnapshotBuilder::Args args{
+            .root = mLayerHierarchyBuilder.getHierarchy(),
+            .layerLifecycleManager = mLayerLifecycleManager,
+            .includeMetadata = mCompositionEngine->getFeatureFlags().test(
+                compositionengine::Feature::kSnapshotLayerMetadata),
+            .displays = mFrontEndDisplayInfos,
+            .displayChanges = mFrontEndDisplayInfosChanged,
+            .globalShadowSettings = mDrawingState.globalShadowSettings,
+            .supportsBlur = mSupportsBlur,
+            .forceFullDamage = mForceFullDamage,
+            .supportedLayerGenericMetadata = getHwComposer().getSupportedLayerGenericMetadata(),
+            .genericLayerMetadataKeyMap = getGenericLayerMetadataKeyMap(),
+            .skipRoundCornersWhenProtected = !getRenderEngine().supportsProtectedContent()
+        };
         mLayerSnapshotBuilder.update(args);
     }
 
-    if (mLayerLifecycleManager.getGlobalChanges().any(Changes::Geometry | Changes::Input |
-                                                      Changes::Hierarchy | Changes::Visibility)) {
+    const auto& globalChanges = mLayerLifecycleManager.getGlobalChanges();
+    if (globalChanges.any(Changes::Geometry | Changes::Input | Changes::Hierarchy | Changes::Visibility)) {
         mUpdateInputInfo = true;
     }
-    if (mLayerLifecycleManager.getGlobalChanges().any(Changes::VisibleRegion | Changes::Hierarchy |
-                                                      Changes::Visibility | Changes::Geometry)) {
+    if (globalChanges.any(Changes::VisibleRegion | Changes::Hierarchy | Changes::Visibility | Changes::Geometry)) {
         mVisibleRegionsDirty = true;
     }
-    if (mLayerLifecycleManager.getGlobalChanges().any(Changes::Hierarchy | Changes::FrameRate)) {
-        // The frame rate of attached choreographers can only change as a result of a
-        // FrameRate change (including when Hierarchy changes).
+    if (globalChanges.any(Changes::Hierarchy | Changes::FrameRate)) {
         mUpdateAttachedChoreographer = true;
     }
-    outTransactionsAreEmpty = mLayerLifecycleManager.getGlobalChanges().get() == 0;
-    if (FlagManager::getInstance().vrr_bugfix_24q4()) {
-        mustComposite |= mLayerLifecycleManager.getGlobalChanges().any(
-                frontend::RequestedLayerState::kMustComposite);
-    } else {
-        mustComposite |= mLayerLifecycleManager.getGlobalChanges().get() != 0;
-    }
+    outTransactionsAreEmpty = globalChanges.get() == 0;
 
     bool newDataLatched = false;
     SFTRACE_NAME("DisplayCallbackAndStatsUpdates");
@@ -2481,41 +2462,32 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
     bool unused = false;
 
     for (auto& layer : mLayerLifecycleManager.getLayers()) {
-        if (layer->changes.test(frontend::RequestedLayerState::Changes::Created) &&
-            layer->bgColorLayer) {
+        if (layer->changes.test(Changes::Created) && layer->bgColorLayer) {
             sp<Layer> bgColorLayer = getFactory().createEffectLayer(
-                    LayerCreationArgs(this, nullptr, layer->name,
-                                      ISurfaceComposerClient::eFXSurfaceEffect, LayerMetadata(),
-                                      std::make_optional(layer->id), true));
+                LayerCreationArgs(this, nullptr, layer->name,
+                                  ISurfaceComposerClient::eFXSurfaceEffect, LayerMetadata(),
+                                  std::make_optional(layer->id), true));
             mLegacyLayers[bgColorLayer->sequence] = bgColorLayer;
         }
-        const bool willReleaseBufferOnLatch = layer->willReleaseBufferOnLatch();
 
+        const bool willReleaseBufferOnLatch = layer->willReleaseBufferOnLatch();
         auto it = mLegacyLayers.find(layer->id);
-        if (it == mLegacyLayers.end() &&
-            layer->changes.test(frontend::RequestedLayerState::Changes::Destroyed)) {
-            // Layer handle was created and immediately destroyed. It was destroyed before it
-            // was added to the map.
+        if (it == mLegacyLayers.end() && layer->changes.test(Changes::Destroyed)) {
             continue;
         }
 
         LLOG_ALWAYS_FATAL_WITH_TRACE_IF(it == mLegacyLayers.end(),
-                                        "Couldnt find layer object for %s",
+                                        "Couldn't find layer object for %s",
                                         layer->getDebugString().c_str());
+
         if (!layer->hasReadyFrame() && !willReleaseBufferOnLatch) {
             if (!it->second->hasBuffer()) {
-                // The last latch time is used to classify a missed frame as buffer stuffing
-                // instead of a missed frame. This is used to identify scenarios where we
-                // could not latch a buffer or apply a transaction due to backpressure.
-                // We only update the latch time for buffer less layers here, the latch time
-                // is updated for buffer layers when the buffer is latched.
                 it->second->updateLastLatchTime(latchTime);
             }
             continue;
         }
 
-        const bool bgColorOnly =
-                !layer->externalTexture && (layer->bgColorLayerId != UNASSIGNED_LAYER_ID);
+        const bool bgColorOnly = !layer->externalTexture && (layer->bgColorLayerId != UNASSIGNED_LAYER_ID);
         if (willReleaseBufferOnLatch) {
             mLayersWithBuffersRemoved.emplace(it->second);
         }
@@ -2530,12 +2502,7 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
 
     updateLayerHistory(latchTime);
     mLayerSnapshotBuilder.forEachSnapshot([&](const frontend::LayerSnapshot& snapshot) {
-        // update output dirty region if we have a queued buffer that is visible or a snapshot
-        // recently became invisible
-        // TODO(b/360050020) investigate if we need to update dirty region when layer color changes
-        if ((snapshot.isVisible &&
-             (mLayersIdsWithQueuedFrames.find(snapshot.path.id) !=
-              mLayersIdsWithQueuedFrames.end())) ||
+        if ((snapshot.isVisible && mLayersIdsWithQueuedFrames.find(snapshot.path.id) != mLayersIdsWithQueuedFrames.end()) ||
             (!snapshot.isVisible && snapshot.changes.test(Changes::Visibility))) {
             Region visibleReg;
             visibleReg.set(snapshot.transformedBoundsWithoutTransparentRegion);
@@ -2552,7 +2519,6 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
         mLayerLifecycleManager.commitChanges();
     }
 
-    // enter boot animation on first buffer latch
     if (CC_UNLIKELY(mBootStage == BootStage::BOOTLOADER && newDataLatched)) {
         ALOGI("Enter boot animation");
         mBootStage = BootStage::BOOTANIMATION;
@@ -2717,10 +2683,8 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
 }
 
 CompositeResultsPerDisplay SurfaceFlinger::composite(
-        PhysicalDisplayId pacesetterId, const scheduler::FrameTargeters& frameTargeters) {
-    const scheduler::FrameTarget& pacesetterTarget =
-            frameTargeters.get(pacesetterId)->get()->target();
-
+    PhysicalDisplayId pacesetterId, const scheduler::FrameTargeters& frameTargeters) {
+    const scheduler::FrameTarget& pacesetterTarget = frameTargeters.get(pacesetterId)->get()->target();
     const VsyncId vsyncId = pacesetterTarget.vsyncId();
     SFTRACE_NAME(ftl::Concat(__func__, ' ', ftl::to_underlying(vsyncId)).c_str());
 
@@ -2732,11 +2696,9 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     // Add outputs for physical displays.
     for (const auto& [id, targeter] : frameTargeters) {
         ftl::FakeGuard guard(mStateLock);
-
         if (const auto display = getCompositionDisplayLocked(id)) {
             refreshArgs.outputs.push_back(display);
         }
-
         refreshArgs.frameTargets.try_emplace(id, &targeter->target());
     }
 
@@ -2748,35 +2710,33 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         // Add outputs for virtual displays.
         if (display->isVirtual()) {
             const Fps refreshRate = display->getAdjustedRefreshRate();
-
             if (!refreshRate.isValid() ||
                 mScheduler->isVsyncInPhase(pacesetterTarget.frameBeginTime(), refreshRate)) {
                 refreshArgs.outputs.push_back(display->getCompositionDisplay());
-            }
+                }
         }
     }
     mPowerAdvisor->setDisplays(displayIds);
 
     const bool updateTaskMetadata = mCompositionEngine->getFeatureFlags().test(
-            compositionengine::Feature::kSnapshotLayerMetadata);
-
+        compositionengine::Feature::kSnapshotLayerMetadata);
     refreshArgs.bufferIdsToUncache = std::move(mBufferIdsToUncache);
 
     if (!FlagManager::getInstance().ce_fence_promise()) {
         refreshArgs.layersWithQueuedFrames.reserve(mLayersWithQueuedFrames.size());
         for (auto& [layer, _] : mLayersWithQueuedFrames) {
             if (const auto& layerFE = layer->getCompositionEngineLayerFE(
-                        {static_cast<uint32_t>(layer->sequence)}))
+            {static_cast<uint32_t>(layer->sequence)})) {
                 refreshArgs.layersWithQueuedFrames.push_back(layerFE);
+            }
         }
     }
 
     refreshArgs.outputColorSetting = mDisplayColorSetting;
     refreshArgs.forceOutputColorMode = mForceColorMode;
-
     refreshArgs.updatingOutputGeometryThisFrame = mVisibleRegionsDirty;
     refreshArgs.updatingGeometryThisFrame = mGeometryDirty.exchange(false) ||
-            mVisibleRegionsDirty || mDrawingState.colorMatrixChanged;
+    mVisibleRegionsDirty || mDrawingState.colorMatrixChanged;
     refreshArgs.internalDisplayRotationFlags = getActiveDisplayRotationFlags();
 
     if (CC_UNLIKELY(mDrawingState.colorMatrixChanged)) {
@@ -2785,23 +2745,18 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     }
 
     refreshArgs.devOptForceClientComposition = mDebugDisableHWC;
-
     if (mDebugFlashDelay != 0) {
         refreshArgs.devOptForceClientComposition = true;
         refreshArgs.devOptFlashDirtyRegionsDelay = std::chrono::milliseconds(mDebugFlashDelay);
     }
 
-    // TODO(b/255601557) Update frameInterval per display
-    refreshArgs.frameInterval =
-            mScheduler->getNextFrameInterval(pacesetterId, pacesetterTarget.expectedPresentTime());
+    refreshArgs.frameInterval = mScheduler->getNextFrameInterval(pacesetterId, pacesetterTarget.expectedPresentTime());
     const auto scheduledFrameResultOpt = mScheduler->getScheduledFrameResult();
     const auto scheduledFrameTimeOpt = scheduledFrameResultOpt
-            ? std::optional{scheduledFrameResultOpt->callbackTime}
-            : std::nullopt;
+    ? std::optional{scheduledFrameResultOpt->callbackTime}
+    : std::nullopt;
     refreshArgs.scheduledFrameTime = scheduledFrameTimeOpt;
     refreshArgs.hasTrustedPresentationListener = mNumTrustedPresentationListeners > 0;
-    // Store the present time just before calling to the composition engine so we could notify
-    // the scheduler.
     const auto presentTime = systemTime();
 
     constexpr bool kCursorOnly = false;
@@ -2813,13 +2768,9 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
             if (!compositionDisplay->getState().isEnabled) continue;
             for (auto outputLayer : compositionDisplay->getOutputLayersOrderedByZ()) {
                 if (outputLayer->getLayerFE().getCompositionState() == nullptr) {
-                    // This is unexpected but instead of crashing, capture traces to disk
-                    // and recover gracefully by forcing CE to rebuild layer stack.
-                    ALOGE("Output layer %s for display %s %" PRIu64 " has a null "
-                          "snapshot. Forcing mVisibleRegionsDirty",
+                    ALOGE("Output layer %s for display %s %" PRIu64 " has a null snapshot. Forcing mVisibleRegionsDirty",
                           outputLayer->getLayerFE().getDebugName(),
                           compositionDisplay->getName().c_str(), compositionDisplay->getId().value);
-
                     TransactionTraceWriter::getInstance().invoke(__func__, /* overwrite= */ false);
                     mVisibleRegionsDirty = true;
                     refreshArgs.updatingOutputGeometryThisFrame = mVisibleRegionsDirty;
@@ -2836,24 +2787,18 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
 
     if (FlagManager::getInstance().ce_fence_promise()) {
         for (auto& [layer, layerFE] : layers) {
-            attachReleaseFenceFutureToLayer(layer, layerFE,
-                                            layerFE->mSnapshot->outputFilter.layerStack);
+            attachReleaseFenceFutureToLayer(layer, layerFE, layerFE->mSnapshot->outputFilter.layerStack);
         }
 
         refreshArgs.layersWithQueuedFrames.reserve(mLayersWithQueuedFrames.size());
         for (auto& [layer, _] : mLayersWithQueuedFrames) {
             if (const auto& layerFE = layer->getCompositionEngineLayerFE(
-                        {static_cast<uint32_t>(layer->sequence)})) {
+            {static_cast<uint32_t>(layer->sequence)})) {
                 refreshArgs.layersWithQueuedFrames.push_back(layerFE);
-                // Some layers are not displayed and do not yet have a future release fence
-                if (layerFE->getReleaseFencePromiseStatus() ==
-                            LayerFE::ReleaseFencePromiseStatus::UNINITIALIZED ||
-                    layerFE->getReleaseFencePromiseStatus() ==
-                            LayerFE::ReleaseFencePromiseStatus::FULFILLED) {
-                    // layerStack is invalid because layer is not on a display
-                    attachReleaseFenceFutureToLayer(layer.get(), layerFE.get(),
-                                                    ui::INVALID_LAYER_STACK);
-                }
+                if (layerFE->getReleaseFencePromiseStatus() == LayerFE::ReleaseFencePromiseStatus::UNINITIALIZED ||
+                    layerFE->getReleaseFencePromiseStatus() == LayerFE::ReleaseFencePromiseStatus::FULFILLED) {
+                    attachReleaseFenceFutureToLayer(layer.get(), layerFE.get(), ui::INVALID_LAYER_STACK);
+                    }
             }
         }
 
@@ -2866,12 +2811,11 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
                 layer->setWasClientComposed(compositionResult.lastClientCompositionFence);
             }
         }
-
     } else {
         mCompositionEngine->present(refreshArgs);
         moveSnapshotsFromCompositionArgs(refreshArgs, layers);
 
-        for (auto [layer, layerFE] : layers) {
+        for (auto& [layer, layerFE] : layers) {
             CompositionResult compositionResult{layerFE->stealCompositionResult()};
             for (auto& [releaseFence, layerStack] : compositionResult.releaseFences) {
                 layer->onLayerDisplayed(std::move(releaseFence), layerStack);
@@ -2885,16 +2829,8 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     SFTRACE_NAME("postComposition");
     mTimeStats->recordFrameDuration(pacesetterTarget.frameBeginTime().ns(), systemTime());
 
-    // Send a power hint after presentation is finished.
     if (mPowerHintSessionEnabled) {
-        // Now that the current frame has been presented above, PowerAdvisor needs the present time
-        // of the previous frame (whose fence is signaled by now) to determine how long the HWC had
-        // waited on that fence to retire before presenting.
-        // TODO(b/355238809) `presentFenceForPreviousFrame` might not always be signaled (e.g. on
-        // devices
-        //  where HWC does not block on the previous present fence). Revise this assumtion.
         const auto& previousPresentFence = pacesetterTarget.presentFenceForPreviousFrame();
-
         mPowerAdvisor->setSfPresentTiming(TimePoint::fromNs(previousPresentFence->getSignalTime()),
                                           TimePoint::now());
         mPowerAdvisor->reportActualWorkDuration();
@@ -2907,54 +2843,40 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     mNotifyExpectedPresentMap[pacesetterId].hintStatus = NotifyExpectedPresentHintStatus::Start;
     onCompositionPresented(pacesetterId, frameTargeters, presentTime);
 
-    const bool hadGpuComposited =
-            multiDisplayUnion(mCompositionCoverage).test(CompositionCoverage::Gpu);
+    const bool hadGpuComposited = multiDisplayUnion(mCompositionCoverage).test(CompositionCoverage::Gpu);
     mCompositionCoverage.clear();
 
     TimeStats::ClientCompositionRecord clientCompositionRecord;
-
     for (const auto& [_, display] : displays) {
         const auto& state = display->getCompositionDisplay()->getState();
-        CompositionCoverageFlags& flags =
-                mCompositionCoverage.try_emplace(display->getId()).first->second;
+        CompositionCoverageFlags& flags = mCompositionCoverage.try_emplace(display->getId()).first->second;
 
         if (state.usesDeviceComposition) {
             flags |= CompositionCoverage::Hwc;
         }
-
         if (state.reusedClientComposition) {
             flags |= CompositionCoverage::GpuReuse;
         } else if (state.usesClientComposition) {
             flags |= CompositionCoverage::Gpu;
         }
 
-        clientCompositionRecord.predicted |=
-                (state.strategyPrediction != CompositionStrategyPredictionState::DISABLED);
-        clientCompositionRecord.predictionSucceeded |=
-                (state.strategyPrediction == CompositionStrategyPredictionState::SUCCESS);
+        clientCompositionRecord.predicted |= (state.strategyPrediction != CompositionStrategyPredictionState::DISABLED);
+        clientCompositionRecord.predictionSucceeded |= (state.strategyPrediction == CompositionStrategyPredictionState::SUCCESS);
     }
 
     const auto coverage = multiDisplayUnion(mCompositionCoverage);
     const bool hasGpuComposited = coverage.test(CompositionCoverage::Gpu);
-
     clientCompositionRecord.hadClientComposition = hasGpuComposited;
     clientCompositionRecord.reused = coverage.test(CompositionCoverage::GpuReuse);
     clientCompositionRecord.changed = hadGpuComposited != hasGpuComposited;
-
     mTimeStats->pushCompositionStrategyState(clientCompositionRecord);
 
-    using namespace ftl::flag_operators;
-
-    // TODO(b/160583065): Enable skip validation when SF caches all client composition layers.
-    const bool hasGpuUseOrReuse =
-            coverage.any(CompositionCoverage::Gpu | CompositionCoverage::GpuReuse);
+    const bool hasGpuUseOrReuse = coverage.any(CompositionCoverage::Gpu | CompositionCoverage::GpuReuse);
     mScheduler->modulateVsync({}, &VsyncModulator::onDisplayRefresh, hasGpuUseOrReuse);
 
     mLayersWithQueuedFrames.clear();
     mLayersIdsWithQueuedFrames.clear();
-    doActiveLayersTracingIfNeeded(true, mVisibleRegionsDirty, pacesetterTarget.frameBeginTime(),
-                                  vsyncId);
-
+    doActiveLayersTracingIfNeeded(true, mVisibleRegionsDirty, pacesetterTarget.frameBeginTime(), vsyncId);
     updateInputFlinger(vsyncId, pacesetterTarget.frameBeginTime());
 
     if (mVisibleRegionsDirty) mHdrLayerInfoChanged = true;
@@ -2969,8 +2891,6 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     }
 
     CompositeResultsPerDisplay resultsPerDisplay;
-
-    // Filter out virtual displays.
     for (const auto& [id, coverage] : mCompositionCoverage) {
         if (const auto idOpt = PhysicalDisplayId::tryCast(id)) {
             resultsPerDisplay.try_emplace(*idOpt, CompositeResult{coverage});
@@ -2979,6 +2899,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
 
     return resultsPerDisplay;
 }
+
 
 bool SurfaceFlinger::isHdrLayer(const frontend::LayerSnapshot& snapshot) const {
     // Even though the camera layer may be using an HDR transfer function or otherwise be "HDR"
