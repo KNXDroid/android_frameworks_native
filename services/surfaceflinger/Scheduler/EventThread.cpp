@@ -45,7 +45,7 @@
 #include <common/FlagManager.h>
 #include <scheduler/VsyncConfig.h>
 #include "DisplayHardware/DisplayMode.h"
-#include "FrameTimeline.h"
+#include "FrameTimeline/FrameTimeline.h"
 #include "VSyncDispatch.h"
 #include "VSyncTracker.h"
 
