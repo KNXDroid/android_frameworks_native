@@ -78,6 +78,17 @@ const FenceTimePtr& FrameTarget::presentFenceForPreviousFrame() const {
     return mPresentFencesLegacy.front().fenceTime;
 }
 
+void FrameTarget::UpdateExpectedPresentTime(TimePoint& expectedPresentTime, Period vsyncPeriod) const {
+    for (size_t i = mPresentFences.size(); i != 0; --i) {
+        const auto& fence = mPresentFences[i - 1];
+
+        if (fence.fenceTime->getSignalTime() == Fence::SIGNAL_TIME_PENDING) {
+            expectedPresentTime += vsyncPeriod;
+            break;
+        }
+    }
+}
+
 void FrameTargeter::beginFrame(const BeginFrameArgs& args, const IVsyncSource& vsyncSource) {
     return beginFrame(args, vsyncSource, &FrameTargeter::isFencePending);
 }
@@ -107,6 +118,7 @@ void FrameTargeter::beginFrame(const BeginFrameArgs& args, const IVsyncSource& v
             mExpectedPresentTime += vsyncPeriod;
         }
     }
+    UpdateExpectedPresentTime(mExpectedPresentTime, vsyncPeriod);
 
     if (!mSupportsExpectedPresentTime) {
         mEarliestPresentTime =
