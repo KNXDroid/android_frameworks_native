@@ -83,13 +83,13 @@ namespace android {
 using namespace std::chrono_literals;
 namespace {
 constexpr int kDumpTableRowLength = 159;
-
 const ui::Transform kIdentityTransform;
 
 TimeStats::SetFrameRateVote frameRateToSetFrameRateVotePayload(Layer::FrameRate frameRate) {
     using FrameRateCompatibility = TimeStats::SetFrameRateVote::FrameRateCompatibility;
     using Seamlessness = TimeStats::SetFrameRateVote::Seamlessness;
-    const auto frameRateCompatibility = [frameRate] {
+
+    const auto frameRateCompatibility = [&] {
         switch (frameRate.vote.type) {
             case Layer::FrameRateCompatibility::Default:
                 return FrameRateCompatibility::Default;
@@ -100,7 +100,7 @@ TimeStats::SetFrameRateVote frameRateToSetFrameRateVotePayload(Layer::FrameRate 
         }
     }();
 
-    const auto seamlessness = [frameRate] {
+    const auto seamlessness = [&] {
         switch (frameRate.vote.seamlessness) {
             case scheduler::Seamlessness::OnlySeamless:
                 return Seamlessness::ShouldBeSeamless;
@@ -111,15 +111,14 @@ TimeStats::SetFrameRateVote frameRateToSetFrameRateVotePayload(Layer::FrameRate 
         }
     }();
 
-    return TimeStats::SetFrameRateVote{.frameRate = frameRate.vote.rate.getValue(),
-                                       .frameRateCompatibility = frameRateCompatibility,
-                                       .seamlessness = seamlessness};
+    return {.frameRate = frameRate.vote.rate.getValue(),
+            .frameRateCompatibility = frameRateCompatibility,
+            .seamlessness = seamlessness};
 }
 
 } // namespace
 
 using namespace ftl::flag_operators;
-
 using base::StringAppendF;
 using frontend::LayerSnapshot;
 using frontend::RoundedCornerState;
@@ -127,20 +126,24 @@ using gui::GameMode;
 using gui::LayerMetadata;
 using gui::WindowInfo;
 using ui::Size;
-
 using PresentState = frametimeline::SurfaceFrame::PresentState;
 
 Layer::Layer(const surfaceflinger::LayerCreationArgs& args)
-      : sequence(args.sequence),
-        mFlinger(sp<SurfaceFlinger>::fromExisting(args.flinger)),
-        mName(base::StringPrintf("%s#%d", args.name.c_str(), sequence)),
-        mWindowType(static_cast<WindowInfo::Type>(
-                args.metadata.getInt32(gui::METADATA_WINDOW_TYPE, 0))) {
+    : sequence(args.sequence),
+      mFlinger(sp<SurfaceFlinger>::fromExisting(args.flinger)),
+      mName(base::StringPrintf("%s#%d", args.name.c_str(), sequence)),
+      mDrawingState(),
+      mPotentialCursor(args.flags & ISurfaceComposerClient::eCursorWindow),
+      mWindowType(static_cast<WindowInfo::Type>(args.metadata.getInt32(gui::METADATA_WINDOW_TYPE, 0))),
+      mOwnerUid(args.ownerUid),
+      mOwnerPid(args.ownerPid),
+      mOwnerAppId(args.ownerUid % PER_USER_RANGE),
+      mLayerFEs() {
     ALOGV("Creating Layer %s", getDebugName());
 
-    mDrawingState.crop.makeInvalid();
+    mDrawingState.crop = Rect::INVALID_RECT;
     mDrawingState.sequence = 0;
-    mDrawingState.transform.set(0, 0);
+    mDrawingState.transform = ui::Transform();
     mDrawingState.frameNumber = 0;
     mDrawingState.previousFrameNumber = 0;
     mDrawingState.barrierFrameNumber = 0;
@@ -154,14 +157,8 @@ Layer::Layer(const surfaceflinger::LayerCreationArgs& args)
     mDrawingState.metadata = args.metadata;
     mDrawingState.frameTimelineInfo = {};
     mDrawingState.postTime = -1;
-    mFrameTracker.setDisplayRefreshPeriod(
-            args.flinger->mScheduler->getPacesetterVsyncPeriod().ns());
+    mFrameTracker.setDisplayRefreshPeriod(args.flinger->mScheduler->getPacesetterVsyncPeriod().ns());
 
-    mOwnerUid = args.ownerUid;
-    mOwnerPid = args.ownerPid;
-    mOwnerAppId = mOwnerUid % PER_USER_RANGE;
-
-    mPotentialCursor = args.flags & ISurfaceComposerClient::eCursorWindow;
     mLayerFEs.emplace_back(frontend::LayerHierarchy::TraversalPath{static_cast<uint32_t>(sequence)},
                            args.flinger->getFactory().createLayerFE(mName, this));
 }
@@ -174,34 +171,31 @@ Layer::~Layer() {
     LOG_ALWAYS_FATAL_IF(std::this_thread::get_id() != mFlinger->mMainThreadId,
                         "Layer destructor called off the main thread.");
 
-    if (mBufferInfo.mBuffer != nullptr) {
+    if (mBufferInfo.mBuffer) {
         callReleaseBufferCallback(mDrawingState.releaseBufferListener,
                                   mBufferInfo.mBuffer->getBuffer(), mBufferInfo.mFrameNumber,
                                   mBufferInfo.mFence);
     }
+
     const int32_t layerId = getSequence();
     mFlinger->mTimeStats->onDestroy(layerId);
     mFlinger->mFrameTracer->onDestroy(layerId);
-
     mFrameTracker.logAndResetStats(mName);
     mFlinger->onLayerDestroyed(this);
 
-    if (mDrawingState.sidebandStream != nullptr) {
+    if (mDrawingState.sidebandStream) {
         mFlinger->mTunnelModeEnabledReporter->decrementTunnelModeCount();
     }
     if (hasTrustedPresentationListener()) {
         mFlinger->mNumTrustedPresentationListeners--;
-        updateTrustedPresentationState(nullptr, nullptr, -1 /* time_in_ms */, true /* leaveState*/);
+        updateTrustedPresentationState(nullptr, nullptr, -1, true);
     }
 }
 
-// ---------------------------------------------------------------------------
-// set-up
-// ---------------------------------------------------------------------------
 sp<IBinder> Layer::getHandle() {
     Mutex::Autolock _l(mLock);
     if (mGetHandleCalled) {
-        ALOGE("Get handle called twice" );
+        ALOGE("Get handle called twice");
         return nullptr;
     }
     mGetHandleCalled = true;
@@ -209,118 +203,78 @@ sp<IBinder> Layer::getHandle() {
     return sp<LayerHandle>::make(mFlinger, sp<Layer>::fromExisting(this));
 }
 
-// ---------------------------------------------------------------------------
-// h/w composer set-up
-// ---------------------------------------------------------------------------
-
-// No early returns.
 void Layer::updateTrustedPresentationState(const DisplayDevice* display,
                                            const frontend::LayerSnapshot* snapshot,
                                            int64_t time_in_ms, bool leaveState) {
-    if (!hasTrustedPresentationListener()) {
-        return;
-    }
+    if (!hasTrustedPresentationListener()) return;
+
     const bool lastState = mLastComputedTrustedPresentationState;
     mLastComputedTrustedPresentationState = false;
 
-    if (!leaveState) {
-        const auto outputLayer = findOutputLayerForDisplay(display, snapshot->path);
-        if (outputLayer != nullptr) {
-            if (outputLayer->getState().coveredRegionExcludingDisplayOverlays) {
-                Region coveredRegion =
-                        *outputLayer->getState().coveredRegionExcludingDisplayOverlays;
-                mLastComputedTrustedPresentationState =
-                        computeTrustedPresentationState(snapshot->geomLayerBounds,
-                                                        snapshot->sourceBounds(), coveredRegion,
-                                                        snapshot->transformedBounds,
-                                                        snapshot->alpha,
-                                                        snapshot->geomLayerTransform,
-                                                        mTrustedPresentationThresholds);
+    if (!leaveState && display) {
+        if (auto outputLayer = findOutputLayerForDisplay(display, snapshot->path)) {
+            if (auto coveredRegion = outputLayer->getState().coveredRegionExcludingDisplayOverlays) {
+                mLastComputedTrustedPresentationState = computeTrustedPresentationState(
+                    snapshot->geomLayerBounds, snapshot->sourceBounds(), *coveredRegion,
+                    snapshot->transformedBounds, snapshot->alpha, snapshot->geomLayerTransform,
+                    mTrustedPresentationThresholds);
             } else {
-                ALOGE("CoveredRegionExcludingDisplayOverlays was not set for %s. Don't compute "
-                      "TrustedPresentationState",
-                      getDebugName());
+                ALOGE("CoveredRegionExcludingDisplayOverlays was not set for %s. Don't compute TrustedPresentationState", getDebugName());
             }
         }
     }
+
     const bool newState = mLastComputedTrustedPresentationState;
     if (lastState && !newState) {
-        // We were in the trusted presentation state, but now we left it,
-        // emit the callback if needed
         if (mLastReportedTrustedPresentationState) {
             mLastReportedTrustedPresentationState = false;
             mTrustedPresentationListener.invoke(false);
         }
-        // Reset the timer
         mEnteredTrustedPresentationStateTime = -1;
     } else if (!lastState && newState) {
-        // We were not in the trusted presentation state, but we entered it, begin the timer
-        // and make sure this gets called at least once more!
         mEnteredTrustedPresentationStateTime = time_in_ms;
         mFlinger->forceFutureUpdate(mTrustedPresentationThresholds.stabilityRequirementMs * 1.5);
     }
 
-    // Has the timer elapsed, but we are still in the state? Emit a callback if needed
     if (!mLastReportedTrustedPresentationState && newState &&
-        (time_in_ms - mEnteredTrustedPresentationStateTime >
-         mTrustedPresentationThresholds.stabilityRequirementMs)) {
+        (time_in_ms - mEnteredTrustedPresentationStateTime > mTrustedPresentationThresholds.stabilityRequirementMs)) {
         mLastReportedTrustedPresentationState = true;
         mTrustedPresentationListener.invoke(true);
     }
 }
 
-/**
- * See SurfaceComposerClient.h: setTrustedPresentationCallback for discussion
- * of how the parameters and thresholds are interpreted. The general spirit is
- * to produce an upper bound on the amount of the buffer which was presented.
- */
 bool Layer::computeTrustedPresentationState(const FloatRect& bounds, const FloatRect& sourceBounds,
-                                            const Region& coveredRegion,
-                                            const FloatRect& screenBounds, float alpha,
-                                            const ui::Transform& effectiveTransform,
+                                            const Region& coveredRegion, const FloatRect& screenBounds,
+                                            float alpha, const ui::Transform& effectiveTransform,
                                             const TrustedPresentationThresholds& thresholds) {
-    if (alpha < thresholds.minAlpha) {
-        return false;
-    }
-    if (sourceBounds.getWidth() == 0 || sourceBounds.getHeight() == 0) {
-        return false;
-    }
-    if (screenBounds.getWidth() == 0 || screenBounds.getHeight() == 0) {
+    if (alpha < thresholds.minAlpha || sourceBounds.isEmpty() || screenBounds.isEmpty()) {
         return false;
     }
 
     const float sx = effectiveTransform.dsdx();
     const float sy = effectiveTransform.dsdy();
     float fractionRendered = std::min(sx * sy, 1.0f);
-
-    float boundsOverSourceW = bounds.getWidth() / (float)sourceBounds.getWidth();
-    float boundsOverSourceH = bounds.getHeight() / (float)sourceBounds.getHeight();
-    fractionRendered *= boundsOverSourceW * boundsOverSourceH;
+    fractionRendered *= (bounds.getWidth() / sourceBounds.getWidth()) * (bounds.getHeight() / sourceBounds.getHeight());
 
     Region tJunctionFreeRegion = Region::createTJunctionFreeRegion(coveredRegion);
-    // Compute the size of all the rects since they may be disconnected.
     float coveredSize = 0;
-    for (auto rect = tJunctionFreeRegion.begin(); rect < tJunctionFreeRegion.end(); rect++) {
-        float size = rect->width() * rect->height();
-        coveredSize += size;
+    for (const auto& rect : tJunctionFreeRegion) {
+        coveredSize += rect.width() * rect.height();
     }
 
     fractionRendered *= (1 - (coveredSize / (screenBounds.getWidth() * screenBounds.getHeight())));
-
-    if (fractionRendered < thresholds.minFractionRendered) {
-        return false;
-    }
-
-    return true;
+    return fractionRendered >= thresholds.minFractionRendered;
 }
 
 Rect Layer::getCroppedBufferSize(const State& s) const {
     Rect size = getBufferSize(s);
     Rect crop = getCrop(s);
     if (!crop.isEmpty() && size.isValid()) {
-        size.intersect(crop, &size);
+        Rect result;
+        size.intersect(crop, &result);
+        return result;
     } else if (!crop.isEmpty()) {
-        size = crop;
+        return crop;
     }
     return size;
 }
@@ -329,39 +283,20 @@ const char* Layer::getDebugName() const {
     return mName.c_str();
 }
 
-// ---------------------------------------------------------------------------
-// drawing...
-// ---------------------------------------------------------------------------
-
-aidl::android::hardware::graphics::composer3::Composition Layer::getCompositionType(
-        const DisplayDevice& display) const {
-    const auto outputLayer = findOutputLayerForDisplay(&display);
-    return getCompositionType(outputLayer);
+aidl::android::hardware::graphics::composer3::Composition Layer::getCompositionType(const DisplayDevice& display) const {
+    return getCompositionType(findOutputLayerForDisplay(&display));
 }
 
-aidl::android::hardware::graphics::composer3::Composition Layer::getCompositionType(
-        const compositionengine::OutputLayer* outputLayer) const {
-    if (outputLayer == nullptr) {
-        return aidl::android::hardware::graphics::composer3::Composition::INVALID;
-    }
-    if (outputLayer->getState().hwc) {
-        return (*outputLayer->getState().hwc).hwcCompositionType;
-    } else {
+aidl::android::hardware::graphics::composer3::Composition Layer::getCompositionType(const compositionengine::OutputLayer* outputLayer) const {
+    if (!outputLayer || !outputLayer->getState().hwc) {
         return aidl::android::hardware::graphics::composer3::Composition::CLIENT;
     }
+    return outputLayer->getState().hwc->hwcCompositionType;
 }
 
-// ----------------------------------------------------------------------------
-// transaction
-// ----------------------------------------------------------------------------
-
 void Layer::commitTransaction() {
-    // Set the present state for all bufferlessSurfaceFramesTX to Presented. The
-    // bufferSurfaceFrameTX will be presented in latchBuffer.
     for (auto& [token, surfaceFrame] : mDrawingState.bufferlessSurfaceFramesTX) {
         if (surfaceFrame->getPresentState() != PresentState::Presented) {
-            // With applyPendingStates, we could end up having presented surfaceframes from previous
-            // states
             surfaceFrame->setPresentState(PresentState::Presented, mLastLatchTime);
             mFlinger->mFrameTimeline->addSurfaceFrame(surfaceFrame);
         }
@@ -377,162 +312,105 @@ bool Layer::setCrop(const Rect& crop) {
     if (mDrawingState.crop == crop) return false;
     mDrawingState.sequence++;
     mDrawingState.crop = crop;
-
     setTransactionFlags(eTransactionNeeded);
     return true;
 }
 
 bool Layer::isLayerFocusedBasedOnPriority(int32_t priority) {
     return priority == PRIORITY_FOCUSED_WITH_MODE || priority == PRIORITY_FOCUSED_WITHOUT_MODE;
-};
+}
 
-void Layer::setFrameTimelineVsyncForBufferTransaction(const FrameTimelineInfo& info,
-                                                      nsecs_t postTime, gui::GameMode gameMode) {
+void Layer::setFrameTimelineVsyncForBufferTransaction(const FrameTimelineInfo& info, nsecs_t postTime, gui::GameMode gameMode) {
     mDrawingState.postTime = postTime;
-
-    // Check if one of the bufferlessSurfaceFramesTX contains the same vsyncId. This can happen if
-    // there are two transactions with the same token, the first one without a buffer and the
-    // second one with a buffer. We promote the bufferlessSurfaceFrame to a bufferSurfaceFrameTX
-    // in that case.
     auto it = mDrawingState.bufferlessSurfaceFramesTX.find(info.vsyncId);
     if (it != mDrawingState.bufferlessSurfaceFramesTX.end()) {
-        // Promote the bufferlessSurfaceFrame to a bufferSurfaceFrameTX
         mDrawingState.bufferSurfaceFrameTX = it->second;
         mDrawingState.bufferlessSurfaceFramesTX.erase(it);
         mDrawingState.bufferSurfaceFrameTX->promoteToBuffer();
         mDrawingState.bufferSurfaceFrameTX->setActualQueueTime(postTime);
     } else {
-        mDrawingState.bufferSurfaceFrameTX =
-                createSurfaceFrameForBuffer(info, postTime, mTransactionName, gameMode);
+        mDrawingState.bufferSurfaceFrameTX = createSurfaceFrameForBuffer(info, postTime, mTransactionName, gameMode);
     }
-
     setFrameTimelineVsyncForSkippedFrames(info, postTime, mTransactionName, gameMode);
 }
 
-void Layer::setFrameTimelineVsyncForBufferlessTransaction(const FrameTimelineInfo& info,
-                                                          nsecs_t postTime,
-                                                          gui::GameMode gameMode) {
+void Layer::setFrameTimelineVsyncForBufferlessTransaction(const FrameTimelineInfo& info, nsecs_t postTime, gui::GameMode gameMode) {
     mDrawingState.frameTimelineInfo = info;
     mDrawingState.postTime = postTime;
     setTransactionFlags(eTransactionNeeded);
 
-    if (const auto& bufferSurfaceFrameTX = mDrawingState.bufferSurfaceFrameTX;
-        bufferSurfaceFrameTX != nullptr) {
-        if (bufferSurfaceFrameTX->getToken() == info.vsyncId) {
-            // BufferSurfaceFrame takes precedence over BufferlessSurfaceFrame. If the same token is
-            // being used for BufferSurfaceFrame, don't create a new one.
-            return;
-        }
+    if (mDrawingState.bufferSurfaceFrameTX && mDrawingState.bufferSurfaceFrameTX->getToken() == info.vsyncId) {
+        return;
     }
-    // For Transactions without a buffer, we create only one SurfaceFrame per vsyncId. If multiple
-    // transactions use the same vsyncId, we just treat them as one SurfaceFrame (unless they are
-    // targeting different vsyncs).
+
     auto it = mDrawingState.bufferlessSurfaceFramesTX.find(info.vsyncId);
     if (it == mDrawingState.bufferlessSurfaceFramesTX.end()) {
-        auto surfaceFrame = createSurfaceFrameForTransaction(info, postTime, gameMode);
-        mDrawingState.bufferlessSurfaceFramesTX[info.vsyncId] = surfaceFrame;
-    } else {
-        if (it->second->getPresentState() == PresentState::Presented) {
-            // If the SurfaceFrame was already presented, its safe to overwrite it since it must
-            // have been from previous vsync.
-            it->second = createSurfaceFrameForTransaction(info, postTime, gameMode);
-        }
+        mDrawingState.bufferlessSurfaceFramesTX[info.vsyncId] = createSurfaceFrameForTransaction(info, postTime, gameMode);
+    } else if (it->second->getPresentState() == PresentState::Presented) {
+        it->second = createSurfaceFrameForTransaction(info, postTime, gameMode);
     }
 
     setFrameTimelineVsyncForSkippedFrames(info, postTime, mTransactionName, gameMode);
 }
 
-void Layer::addSurfaceFrameDroppedForBuffer(
-        std::shared_ptr<frametimeline::SurfaceFrame>& surfaceFrame, nsecs_t dropTime) {
+void Layer::addSurfaceFrameDroppedForBuffer(std::shared_ptr<frametimeline::SurfaceFrame>& surfaceFrame, nsecs_t dropTime) {
     surfaceFrame->setDropTime(dropTime);
     surfaceFrame->setPresentState(PresentState::Dropped);
     mFlinger->mFrameTimeline->addSurfaceFrame(surfaceFrame);
 }
 
-void Layer::addSurfaceFramePresentedForBuffer(
-        std::shared_ptr<frametimeline::SurfaceFrame>& surfaceFrame, nsecs_t acquireFenceTime,
-        nsecs_t currentLatchTime) {
+void Layer::addSurfaceFramePresentedForBuffer(std::shared_ptr<frametimeline::SurfaceFrame>& surfaceFrame, nsecs_t acquireFenceTime, nsecs_t currentLatchTime) {
     surfaceFrame->setAcquireFenceTime(acquireFenceTime);
     surfaceFrame->setPresentState(PresentState::Presented, mLastLatchTime);
     mFlinger->mFrameTimeline->addSurfaceFrame(surfaceFrame);
     updateLastLatchTime(currentLatchTime);
 }
 
-std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForTransaction(
-        const FrameTimelineInfo& info, nsecs_t postTime, gui::GameMode gameMode) {
-    auto surfaceFrame =
-            mFlinger->mFrameTimeline->createSurfaceFrameForToken(info, mOwnerPid, mOwnerUid,
-                                                                 getSequence(), mName,
-                                                                 mTransactionName,
-                                                                 /*isBuffer*/ false, gameMode);
+std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForTransaction(const FrameTimelineInfo& info, nsecs_t postTime, gui::GameMode gameMode) {
+    auto surfaceFrame = mFlinger->mFrameTimeline->createSurfaceFrameForToken(info, mOwnerPid, mOwnerUid, getSequence(), mName, mTransactionName, false, gameMode);
     surfaceFrame->setActualStartTime(info.startTimeNanos);
-    // For Transactions, the post time is considered to be both queue and acquire fence time.
     surfaceFrame->setActualQueueTime(postTime);
     surfaceFrame->setAcquireFenceTime(postTime);
-    const auto fps = mFlinger->mScheduler->getFrameRateOverride(getOwnerUid());
-    if (fps) {
+    if (auto fps = mFlinger->mScheduler->getFrameRateOverride(getOwnerUid())) {
         surfaceFrame->setRenderRate(*fps);
     }
     return surfaceFrame;
 }
 
-std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForBuffer(
-        const FrameTimelineInfo& info, nsecs_t queueTime, std::string debugName,
-        gui::GameMode gameMode) {
-    auto surfaceFrame =
-            mFlinger->mFrameTimeline->createSurfaceFrameForToken(info, mOwnerPid, mOwnerUid,
-                                                                 getSequence(), mName, debugName,
-                                                                 /*isBuffer*/ true, gameMode);
+std::shared_ptr<frametimeline::SurfaceFrame> Layer::createSurfaceFrameForBuffer(const FrameTimelineInfo& info, nsecs_t queueTime, std::string debugName, gui::GameMode gameMode) {
+    auto surfaceFrame = mFlinger->mFrameTimeline->createSurfaceFrameForToken(info, mOwnerPid, mOwnerUid, getSequence(), mName, debugName, true, gameMode);
     surfaceFrame->setActualStartTime(info.startTimeNanos);
-    // For buffers, acquire fence time will set during latch.
     surfaceFrame->setActualQueueTime(queueTime);
-    const auto fps = mFlinger->mScheduler->getFrameRateOverride(getOwnerUid());
-    if (fps) {
+    if (auto fps = mFlinger->mScheduler->getFrameRateOverride(getOwnerUid())) {
         surfaceFrame->setRenderRate(*fps);
     }
     return surfaceFrame;
 }
 
-void Layer::setFrameTimelineVsyncForSkippedFrames(const FrameTimelineInfo& info, nsecs_t postTime,
-                                                  std::string debugName, gui::GameMode gameMode) {
-    if (info.skippedFrameVsyncId == FrameTimelineInfo::INVALID_VSYNC_ID) {
-        return;
-    }
+void Layer::setFrameTimelineVsyncForSkippedFrames(const FrameTimelineInfo& info, nsecs_t postTime, std::string debugName, gui::GameMode gameMode) {
+    if (info.skippedFrameVsyncId == FrameTimelineInfo::INVALID_VSYNC_ID) return;
 
     FrameTimelineInfo skippedFrameTimelineInfo = info;
     skippedFrameTimelineInfo.vsyncId = info.skippedFrameVsyncId;
-
-    auto surfaceFrame =
-            mFlinger->mFrameTimeline->createSurfaceFrameForToken(skippedFrameTimelineInfo,
-                                                                 mOwnerPid, mOwnerUid,
-                                                                 getSequence(), mName, debugName,
-                                                                 /*isBuffer*/ false, gameMode);
+    auto surfaceFrame = mFlinger->mFrameTimeline->createSurfaceFrameForToken(skippedFrameTimelineInfo, mOwnerPid, mOwnerUid, getSequence(), mName, debugName, false, gameMode);
     surfaceFrame->setActualStartTime(skippedFrameTimelineInfo.skippedFrameStartTimeNanos);
-    // For Transactions, the post time is considered to be both queue and acquire fence time.
     surfaceFrame->setActualQueueTime(postTime);
     surfaceFrame->setAcquireFenceTime(postTime);
-    const auto fps = mFlinger->mScheduler->getFrameRateOverride(getOwnerUid());
-    if (fps) {
+    if (auto fps = mFlinger->mScheduler->getFrameRateOverride(getOwnerUid())) {
         surfaceFrame->setRenderRate(*fps);
     }
     addSurfaceFrameDroppedForBuffer(surfaceFrame, postTime);
 }
 
-bool Layer::setFrameRateForLayerTree(FrameRate frameRate, const scheduler::LayerProps& layerProps,
-                                     nsecs_t now) {
-    if (mDrawingState.frameRateForLayerTree == frameRate) {
-        return false;
-    }
-
+bool Layer::setFrameRateForLayerTree(FrameRate frameRate, const scheduler::LayerProps& layerProps, nsecs_t now) {
+    if (mDrawingState.frameRateForLayerTree == frameRate) return false;
     mDrawingState.frameRateForLayerTree = frameRate;
-    mFlinger->mScheduler
-            ->recordLayerHistory(sequence, layerProps, now, now,
-                                 scheduler::LayerHistory::LayerUpdateType::SetFrameRate);
+    mFlinger->mScheduler->recordLayerHistory(sequence, layerProps, now, now, scheduler::LayerHistory::LayerUpdateType::SetFrameRate);
     return true;
 }
 
 Layer::FrameRate Layer::getFrameRateForLayerTree() const {
-    return getDrawingState().frameRateForLayerTree;
+    return mDrawingState.frameRateForLayerTree;
 }
 
 // ----------------------------------------------------------------------------
