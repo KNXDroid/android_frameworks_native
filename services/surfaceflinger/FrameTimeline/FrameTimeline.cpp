@@ -1367,34 +1367,7 @@ void FrameTimeline::DisplayFrame::traceActuals(pid_t surfaceFlingerPid, nsecs_t 
 nsecs_t FrameTimeline::DisplayFrame::trace(pid_t surfaceFlingerPid, nsecs_t monoBootOffset,
                                            nsecs_t previousPredictionPresentTime,
                                            bool filterFramesBeforeTraceStarts) const {
-    if (mSurfaceFrames.empty()) {
-        // We don't want to trace display frames without any surface frames updates as this cannot
-        // be janky
-        return previousPredictionPresentTime;
-    }
-
-    if (mToken == FrameTimelineInfo::INVALID_VSYNC_ID) {
-        // DisplayFrame should not have an invalid token.
-        ALOGE("Cannot trace DisplayFrame with invalid token");
-        return previousPredictionPresentTime;
-    }
-
-    if (mPredictionState == PredictionState::Valid) {
-        // Expired and unknown predictions have zeroed timestamps. This cannot be used in any
-        // meaningful way in a trace.
-        tracePredictions(surfaceFlingerPid, monoBootOffset, filterFramesBeforeTraceStarts);
-    }
-    traceActuals(surfaceFlingerPid, monoBootOffset, filterFramesBeforeTraceStarts);
-
-    for (auto& surfaceFrame : mSurfaceFrames) {
-        surfaceFrame->trace(mToken, monoBootOffset, filterFramesBeforeTraceStarts);
-    }
-
-    if (FlagManager::getInstance().add_sf_skipped_frames_to_trace()) {
-        addSkippedFrame(surfaceFlingerPid, monoBootOffset, previousPredictionPresentTime,
-                        filterFramesBeforeTraceStarts);
-    }
-    return mSurfaceFlingerPredictions.presentTime;
+    return 0;
 }
 
 float FrameTimeline::computeFps(const std::unordered_set<int32_t>& layerIds) {

@@ -45,13 +45,7 @@
 #include "../skia/SkiaVkRenderEngine.h"
 #include "../threaded/RenderEngineThreaded.h"
 
-// TODO: b/341728634 - Clean up conditional compilation.
-#if COM_ANDROID_GRAPHICS_SURFACEFLINGER_FLAGS(GRAPHITE_RENDERENGINE) || \
-        COM_ANDROID_GRAPHICS_SURFACEFLINGER_FLAGS(FORCE_COMPILE_GRAPHITE_RENDERENGINE)
 #define COMPILE_GRAPHITE_RENDERENGINE 1
-#else
-#define COMPILE_GRAPHITE_RENDERENGINE 0
-#endif
 
 constexpr int DEFAULT_DISPLAY_WIDTH = 128;
 constexpr int DEFAULT_DISPLAY_HEIGHT = 256;

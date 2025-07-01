@@ -2567,9 +2567,8 @@ bool SurfaceFlinger::updateLayerSnapshots(VsyncId vsyncId, nsecs_t frameTimeNs,
 }
 
 bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
-                            const scheduler::FrameTargets& frameTargets) {
+                           const scheduler::FrameTargets& frameTargets) {
     const scheduler::FrameTarget& pacesetterFrameTarget = *frameTargets.get(pacesetterId)->get();
-
     const VsyncId vsyncId = pacesetterFrameTarget.vsyncId();
     SFTRACE_NAME(ftl::Concat(__func__, ' ', ftl::to_underlying(vsyncId)).c_str());
 
@@ -2577,24 +2576,23 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
         mTimeStats->incrementMissedFrames();
     }
 
-    // If a mode set is pending and the fence hasn't fired yet, wait for the next commit.
-    if (std::any_of(frameTargets.begin(), frameTargets.end(),
-                    [this](const auto& pair) FTL_FAKE_GUARD(kMainThreadContext) {
-                        const auto [displayId, target] = pair;
-                        return target->isFramePending() &&
-                                mDisplayModeController.isModeSetPending(displayId);
-                    })) {
-        mScheduler->scheduleFrame();
-        return false;
+    // Optimization 1: Gather pending mode set display IDs outside the lock
+    std::vector<PhysicalDisplayId> pendingModeSetDisplays;
+    for (const auto& [displayId, target] : frameTargets) {
+        if (target->isFramePending() && mDisplayModeController.isModeSetPending(displayId)) {
+            mScheduler->scheduleFrame();
+            return false;
+        }
+        if (mDisplayModeController.isModeSetPending(displayId)) {
+            pendingModeSetDisplays.push_back(displayId);
+        }
     }
 
-    {
+    // Optimization 2: Reduce lock scope for finalizing display mode changes
+    if (!pendingModeSetDisplays.empty()) {
         ConditionalLock lock(mStateLock, FlagManager::getInstance().connected_display());
-
-        for (const auto [displayId, _] : frameTargets) {
-            if (mDisplayModeController.isModeSetPending(displayId)) {
-                finalizeDisplayModeChange(displayId);
-            }
+        for (PhysicalDisplayId displayId : pendingModeSetDisplays) {
+            finalizeDisplayModeChange(displayId);
         }
     }
 
@@ -2605,8 +2603,8 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
                         pacesetterFrameTarget.expectedPresentTime());
             }
             const Duration slack = FlagManager::getInstance().allow_n_vsyncs_in_targeter()
-                    ? TimePoint::now() - pacesetterFrameTarget.frameBeginTime()
-                    : Duration::fromNs(0);
+                                       ? TimePoint::now() - pacesetterFrameTarget.frameBeginTime()
+                                       : Duration::fromNs(0);
             scheduleCommit(FrameHint::kNone, slack);
             return false;
         }
@@ -2615,15 +2613,13 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
     const Period vsyncPeriod = mScheduler->getVsyncSchedule()->period();
 
     // Save this once per commit + composite to ensure consistency
-    // TODO (b/240619471): consider removing active display check once AOD is fixed
     const auto activeDisplay = FTL_FAKE_GUARD(mStateLock, getDisplayDeviceLocked(mActiveDisplayId));
     mPowerHintSessionEnabled = mPowerAdvisor->usePowerHintSession() && activeDisplay &&
-            activeDisplay->getPowerMode() == hal::PowerMode::ON;
+                               activeDisplay->getPowerMode() == hal::PowerMode::ON;
     if (mPowerHintSessionEnabled) {
         mPowerAdvisor->setCommitStart(pacesetterFrameTarget.frameBeginTime());
         mPowerAdvisor->setExpectedPresentTime(pacesetterFrameTarget.expectedPresentTime());
 
-        // Frame delay is how long we should have minus how long we actually have.
         const Duration idealSfWorkDuration =
                 mScheduler->vsyncModulator().getVsyncConfig().sfWorkDuration;
         const Duration frameDelay =
@@ -2644,50 +2640,38 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
         }
     }
 
-    // Composite if transactions were committed, or if requested by HWC.
     bool mustComposite = mMustComposite.exchange(false);
     {
         mFrameTimeline->setSfWakeUp(ftl::to_underlying(vsyncId),
-                                    pacesetterFrameTarget.frameBeginTime().ns(),
-                                    Fps::fromPeriodNsecs(vsyncPeriod.ns()),
-                                    mScheduler->getPacesetterRefreshRate());
+                                     pacesetterFrameTarget.frameBeginTime().ns(),
+                                     Fps::fromPeriodNsecs(vsyncPeriod.ns()),
+                                     mScheduler->getPacesetterRefreshRate());
 
         const bool flushTransactions = clearTransactionFlags(eTransactionFlushNeeded);
         bool transactionsAreEmpty = false;
         mustComposite |= updateLayerSnapshots(vsyncId, pacesetterFrameTarget.frameBeginTime().ns(),
-                                              flushTransactions, transactionsAreEmpty);
+                                               flushTransactions, transactionsAreEmpty);
 
-        // Tell VsyncTracker that we are going to present this frame before scheduling
-        // setTransactionFlags which will schedule another SF frame. This was if the tracker
-        // needs to adjust the vsync timeline, it will be done before the next frame.
         if (FlagManager::getInstance().vrr_config() && mustComposite) {
             mScheduler->getVsyncSchedule()->getTracker().onFrameBegin(
-                pacesetterFrameTarget.expectedPresentTime(),
-                pacesetterFrameTarget.lastSignaledFrameTime());
+                    pacesetterFrameTarget.expectedPresentTime(),
+                    pacesetterFrameTarget.lastSignaledFrameTime());
         }
         if (transactionFlushNeeded()) {
             setTransactionFlags(eTransactionFlushNeeded);
         }
 
-        // This has to be called after latchBuffers because we want to include the layers that have
-        // been latched in the commit callback
         if (transactionsAreEmpty) {
-            // Invoke empty transaction callbacks early.
             mTransactionCallbackInvoker.sendCallbacks(false /* onCommitOnly */);
         } else {
-            // Invoke OnCommit callbacks.
             mTransactionCallbackInvoker.sendCallbacks(true /* onCommitOnly */);
         }
     }
 
-    // Layers need to get updated (in the previous line) before we can use them for
-    // choosing the refresh rate.
-    // Hold mStateLock as chooseRefreshRateForContent promotes wp<Layer> to sp<Layer>
-    // and may eventually call to ~Layer() if it holds the last reference
-    {
-        bool updateAttachedChoreographer = mUpdateAttachedChoreographer;
-        mUpdateAttachedChoreographer = false;
+    bool updateAttachedChoreographer = mUpdateAttachedChoreographer;
+    mUpdateAttachedChoreographer = false;
 
+    {
         Mutex::Autolock lock(mStateLock);
         mScheduler->chooseRefreshRateForContent(&mLayerHierarchyBuilder.getHierarchy(),
                                                 updateAttachedChoreographer);
@@ -2707,7 +2691,7 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
         updateInputFlinger(vsyncId, pacesetterFrameTarget.frameBeginTime());
     }
     doActiveLayersTracingIfNeeded(false, mVisibleRegionsDirty,
-                                  pacesetterFrameTarget.frameBeginTime(), vsyncId);
+                                    pacesetterFrameTarget.frameBeginTime(), vsyncId);
 
     mLastCommittedVsyncId = vsyncId;
 
@@ -2767,7 +2751,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         for (auto& [layer, _] : mLayersWithQueuedFrames) {
             if (const auto& layerFE = layer->getCompositionEngineLayerFE(
                         {static_cast<uint32_t>(layer->sequence)}))
-                refreshArgs.layersWithQueuedFrames.push_back(layerFE);
+                refreshArgs.layersWithQueuedFrames.emplace_back(std::move(layerFE));
         }
     }
 
@@ -2844,7 +2828,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
         for (auto& [layer, _] : mLayersWithQueuedFrames) {
             if (const auto& layerFE = layer->getCompositionEngineLayerFE(
                         {static_cast<uint32_t>(layer->sequence)})) {
-                refreshArgs.layersWithQueuedFrames.push_back(layerFE);
+                refreshArgs.layersWithQueuedFrames.emplace_back(std::move(layerFE));
                 // Some layers are not displayed and do not yet have a future release fence
                 if (layerFE->getReleaseFencePromiseStatus() ==
                             LayerFE::ReleaseFencePromiseStatus::UNINITIALIZED ||
@@ -8136,7 +8120,6 @@ void SurfaceFlinger::onActiveDisplayChangedLocked(const DisplayDevice* inactiveD
 
     // TODO(b/255635711): Check for pending mode changes on other displays.
     mScheduler->setModeChangePending(false);
-
     mScheduler->setPacesetterDisplay(mActiveDisplayId);
 
     onActiveDisplaySizeChanged(activeDisplay);
@@ -8177,8 +8160,6 @@ void SurfaceFlinger::updateHdcpLevels(hal::HWDisplayId hwcDisplayId, int32_t con
         return;
     }
 
-    Mutex::Autolock lock(mStateLock);
-
     const auto idOpt = getHwComposer().toPhysicalDisplayId(hwcDisplayId);
     if (!idOpt) {
         ALOGE("No display found for HDCP level changed event: connected=%d, max=%d for "
@@ -8186,6 +8167,8 @@ void SurfaceFlinger::updateHdcpLevels(hal::HWDisplayId hwcDisplayId, int32_t con
               connectedLevel, maxLevel, hwcDisplayId);
         return;
     }
+
+    Mutex::Autolock lock(mStateLock);
 
     const bool isInternalDisplay =
             mPhysicalDisplays.get(*idOpt).transform(&PhysicalDisplay::isInternal).value_or(false);
@@ -8197,14 +8180,15 @@ void SurfaceFlinger::updateHdcpLevels(hal::HWDisplayId hwcDisplayId, int32_t con
     }
 
     static_cast<void>(mScheduler->schedule([this, displayId = *idOpt, connectedLevel, maxLevel]() {
-        if (const auto display = FTL_FAKE_GUARD(mStateLock, getDisplayDeviceLocked(displayId))) {
-            Mutex::Autolock lock(mStateLock);
+        Mutex::Autolock lock(mStateLock);
+        if (const auto display = getDisplayDeviceLocked(displayId)) {
             display->setSecure(connectedLevel >= 2 /* HDCP_V1 */);
         }
         mScheduler->onHdcpLevelsChanged(scheduler::Cycle::Render, displayId, connectedLevel,
                                         maxLevel);
     }));
 }
+
 
 std::shared_ptr<renderengine::ExternalTexture> SurfaceFlinger::getExternalTextureFromBufferData(
         BufferData& bufferData, const char* layerName, uint64_t transactionId) {
@@ -8356,8 +8340,7 @@ SurfaceFlinger::getLayerSnapshotsForScreenshots(std::optional<ui::LayerStack> la
         if (excludeLayerIds.empty()) {
             auto getLayerSnapshotsFn =
                     getLayerSnapshotsForScreenshots(layerStack, uid, /*snapshotFilterFn=*/nullptr);
-            std::vector<std::pair<Layer*, sp<LayerFE>>> layers = getLayerSnapshotsFn();
-            return layers;
+            return getLayerSnapshotsFn();
         }
 
         frontend::LayerSnapshotBuilder::Args
@@ -8428,6 +8411,7 @@ SurfaceFlinger::getLayerSnapshotsForScreenshots(uint32_t rootLayerId, uint32_t u
         return layers;
     };
 }
+
 
 void SurfaceFlinger::doActiveLayersTracingIfNeeded(bool isCompositionComputed,
                                                    bool visibleRegionDirty, TimePoint time,
@@ -9417,3 +9401,4 @@ const DisplayDevice* SurfaceFlinger::getDisplayFromLayerStack(ui::LayerStack lay
 
 // TODO(b/129481165): remove the #pragma below and fix conversion issues
 #pragma clang diagnostic pop // ignored "-Wconversion -Wextra"
+

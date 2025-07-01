@@ -551,11 +551,6 @@ EGLAPI EGLBoolean EGLAPIENTRY eglPresentationTimeANDROID (EGLDisplay dpy, EGLSur
 #define EGL_RECORDABLE_ANDROID            0x3142
 #endif /* EGL_ANDROID_recordable */
 
-#ifndef EGL_ANDROID_telemetry_hint
-#define EGL_ANDROID_telemetry_hint 1
-#define EGL_TELEMETRY_HINT_ANDROID        0x3570
-#endif /* EGL_ANDROID_telemetry_hint */
-
 #ifndef EGL_ANGLE_d3d_share_handle_client_buffer
 #define EGL_ANGLE_d3d_share_handle_client_buffer 1
 #define EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE 0x3200

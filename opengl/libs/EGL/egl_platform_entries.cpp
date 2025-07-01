@@ -917,8 +917,6 @@ EGLContext eglCreateContextImpl(EGLDisplay dpy, EGLConfig config, EGLContext sha
             share_list = c->context;
         }
 
-        bool skip_telemetry = false;
-
         auto findAttribute = [](const EGLint* attrib_ptr, GLint attribute, GLint* value) {
             while (attrib_ptr && *attrib_ptr != EGL_NONE) {
                 GLint attr = *attrib_ptr++;
@@ -934,24 +932,7 @@ EGLContext eglCreateContextImpl(EGLDisplay dpy, EGLConfig config, EGLContext sha
         };
 
         std::vector<EGLint> replacement_attrib_list;
-        GLint telemetry_value;
-        if (findAttribute(attrib_list, EGL_TELEMETRY_HINT_ANDROID, &telemetry_value)) {
-            skip_telemetry = (telemetry_value == android::GpuStatsInfo::SKIP_TELEMETRY);
 
-            // We need to remove EGL_TELEMETRY_HINT_ANDROID or the underlying drivers will
-            // complain about an unexpected attribute
-            const EGLint* attrib_ptr = attrib_list;
-            while (attrib_ptr && *attrib_ptr != EGL_NONE) {
-                GLint attr = *attrib_ptr++;
-                GLint val = *attrib_ptr++;
-                if (attr != EGL_TELEMETRY_HINT_ANDROID) {
-                    replacement_attrib_list.push_back(attr);
-                    replacement_attrib_list.push_back(val);
-                }
-            }
-            replacement_attrib_list.push_back(EGL_NONE);
-            attrib_list = replacement_attrib_list.data();
-        }
         // b/111083885 - If we are presenting EGL 1.4 interface to apps
         // error out on robust access attributes that are invalid
         // in EGL 1.4 as the driver may be fine with them but dEQP expects
@@ -983,10 +964,6 @@ EGLContext eglCreateContextImpl(EGLDisplay dpy, EGLConfig config, EGLContext sha
             if (version == egl_connection_t::GLESv1_INDEX) {
                 android::GraphicsEnv::getInstance().setTargetStats(
                         android::GpuStatsInfo::Stats::GLES_1_IN_USE);
-            }
-            if (!skip_telemetry) {
-                android::GraphicsEnv::getInstance().setTargetStats(
-                        android::GpuStatsInfo::Stats::CREATED_GLES_CONTEXT);
             }
             egl_context_t* c = new egl_context_t(dpy, context, config, cnx, version);
             return c;
