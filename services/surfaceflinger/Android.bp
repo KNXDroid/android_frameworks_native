@@ -36,6 +36,9 @@ cc_defaults {
         "-Wunreachable-code",
         "-Wunused",
         "-O3",
+        "-Wno-unused-parameter",
+        "-fopenmp",
+        "-DANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION",
     ],
 }
 
