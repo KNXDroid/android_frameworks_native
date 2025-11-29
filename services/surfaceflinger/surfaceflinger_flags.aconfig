@@ -64,14 +64,6 @@ flag {
   bug: "301647974"
 }
 
-flag {
-  name: "use_known_refresh_rate_for_fps_consistency"
-  namespace: "core_graphics"
-  description: "Whether to use the closest known refresh rate to determine the fps consistency."
-  bug: "299201319"
-  is_fixed_read_only: true
-}
-
 # This flag is broken.
 # See alternative one: cache_when_source_crop_layer_only_moved
 # flag {
