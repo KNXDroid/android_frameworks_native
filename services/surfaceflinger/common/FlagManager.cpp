@@ -178,7 +178,6 @@ void FlagManager::dump(std::string& result) const {
     DUMP_ACONFIG_FLAG(synced_resolution_switch);
     DUMP_ACONFIG_FLAG(trace_frame_rate_override);
     DUMP_ACONFIG_FLAG(true_hdr_screenshots);
-    DUMP_ACONFIG_FLAG(use_known_refresh_rate_for_fps_consistency);
     DUMP_ACONFIG_FLAG(vrr_bugfix_24q4);
     DUMP_ACONFIG_FLAG(vrr_bugfix_dropped_frame);
     DUMP_ACONFIG_FLAG(vrr_config);
@@ -263,7 +262,6 @@ FLAG_MANAGER_ACONFIG_FLAG(vrr_config, "debug.sf.enable_vrr_config")
 FLAG_MANAGER_ACONFIG_FLAG(hdcp_level_hal, "")
 FLAG_MANAGER_ACONFIG_FLAG(hdcp_negotiation, "debug.sf.hdcp_negotiation");
 FLAG_MANAGER_ACONFIG_FLAG(add_sf_skipped_frames_to_trace, "")
-FLAG_MANAGER_ACONFIG_FLAG(use_known_refresh_rate_for_fps_consistency, "")
 FLAG_MANAGER_ACONFIG_FLAG(cache_when_source_crop_layer_only_moved,
                           "debug.sf.cache_source_crop_only_moved")
 FLAG_MANAGER_ACONFIG_FLAG(enable_fro_dependent_features, "")
