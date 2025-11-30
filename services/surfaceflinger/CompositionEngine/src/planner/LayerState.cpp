@@ -71,8 +71,7 @@ size_t LayerState::getHash() const {
         if (field->getField() == LayerStateField::Buffer) {
             continue;
         }
-        if (FlagManager::getInstance().cache_when_source_crop_layer_only_moved() &&
-            field->getField() == LayerStateField::SourceCrop) {
+        if (field->getField() == LayerStateField::SourceCrop) {
             continue;
         }
         android::hashCombineSingleHashed(hash, field->getHash());
