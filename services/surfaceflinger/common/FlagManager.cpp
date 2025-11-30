@@ -140,7 +140,6 @@ void FlagManager::dump(std::string& result) const {
     DUMP_ACONFIG_FLAG(allow_n_vsyncs_in_targeter);
     DUMP_ACONFIG_FLAG(arr_setframerate_gte_enum);
     DUMP_ACONFIG_FLAG(begone_bright_hlg);
-    DUMP_ACONFIG_FLAG(cache_when_source_crop_layer_only_moved);
     DUMP_ACONFIG_FLAG(commit_not_composited);
     DUMP_ACONFIG_FLAG(connected_display_hdr);
     DUMP_ACONFIG_FLAG(correct_dpi_with_display_size);
@@ -261,8 +260,6 @@ FLAG_MANAGER_ACONFIG_FLAG(vrr_config, "debug.sf.enable_vrr_config")
 FLAG_MANAGER_ACONFIG_FLAG(hdcp_level_hal, "")
 FLAG_MANAGER_ACONFIG_FLAG(hdcp_negotiation, "debug.sf.hdcp_negotiation");
 FLAG_MANAGER_ACONFIG_FLAG(add_sf_skipped_frames_to_trace, "")
-FLAG_MANAGER_ACONFIG_FLAG(cache_when_source_crop_layer_only_moved,
-                          "debug.sf.cache_source_crop_only_moved")
 FLAG_MANAGER_ACONFIG_FLAG(enable_fro_dependent_features, "")
 FLAG_MANAGER_ACONFIG_FLAG(display_protected, "")
 FLAG_MANAGER_ACONFIG_FLAG(fp16_client_target, "debug.sf.fp16_client_target")

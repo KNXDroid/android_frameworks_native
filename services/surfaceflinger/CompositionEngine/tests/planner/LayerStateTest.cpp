@@ -466,9 +466,6 @@ TEST_F(LayerStateTest, updateSourceCrop) {
 }
 
 TEST_F(LayerStateTest, compareSourceCrop) {
-    SET_FLAG_FOR_TEST(com::android::graphics::surfaceflinger::flags::
-                              cache_when_source_crop_layer_only_moved,
-                      false);
     OutputLayerCompositionState outputLayerCompositionState;
     outputLayerCompositionState.sourceCrop = sFloatRectOne;
     LayerFECompositionState layerFECompositionState;

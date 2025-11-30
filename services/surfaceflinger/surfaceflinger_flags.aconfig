@@ -88,26 +88,6 @@ flag {
   bug: "301647974"
 }
 
-# This flag is broken.
-# See alternative one: cache_when_source_crop_layer_only_moved
-# flag {
-#   name: "cache_if_source_crop_layer_only_moved"
-#   namespace: "core_graphics"
-#   description: "do not flatten layers if source crop is only moved"
-#   bug: "305718400"
-#   is_fixed_read_only: true
-# }
-
-# This file is locked and should not be changed. Use surfaceflinger_flags_new.aconfig
-
-flag {
-  name: "cache_when_source_crop_layer_only_moved"
-  namespace: "core_graphics"
-  description: "do not flatten layers if source crop is only moved"
-  bug: "305718400"
-  is_fixed_read_only: true
-}
-
 flag {
   name: "enable_fro_dependent_features"
   namespace: "core_graphics"

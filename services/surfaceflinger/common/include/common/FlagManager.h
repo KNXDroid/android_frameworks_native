@@ -74,7 +74,6 @@ public:
     bool allow_n_vsyncs_in_targeter() const;
     bool arr_setframerate_gte_enum() const;
     bool begone_bright_hlg() const;
-    bool cache_when_source_crop_layer_only_moved() const;
     bool commit_not_composited() const;
     bool connected_display_hdr() const;
     bool correct_dpi_with_display_size() const;
