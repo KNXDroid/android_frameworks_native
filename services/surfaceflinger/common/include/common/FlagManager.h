@@ -86,7 +86,6 @@ public:
     bool correct_dpi_with_display_size() const;
     bool deprecate_frame_tracker() const;
     bool deprecate_vsync_sf() const;
-    bool disable_synthetic_vsync_for_performance() const;
     bool display_command_modeset() const;
     bool enable_layer_command_batching() const;
     bool enable_small_area_detection() const;

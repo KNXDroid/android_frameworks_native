@@ -156,7 +156,6 @@ void FlagManager::dump(std::string& result) const {
     DUMP_ACONFIG_FLAG(correct_dpi_with_display_size);
     DUMP_ACONFIG_FLAG(deprecate_frame_tracker);
     DUMP_ACONFIG_FLAG(deprecate_vsync_sf);
-    DUMP_ACONFIG_FLAG(disable_synthetic_vsync_for_performance);
     DUMP_ACONFIG_FLAG(display_command_modeset);
     DUMP_ACONFIG_FLAG(enable_layer_command_batching);
     DUMP_ACONFIG_FLAG(enable_small_area_detection);

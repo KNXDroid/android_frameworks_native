@@ -333,7 +333,6 @@ void SetPhysicalDisplayPowerModeTest::transitionDisplayCommon() {
 
     SET_FLAG_FOR_TEST(android::companion::virtualdevice::flags::correct_virtual_display_power_state,
                       true);
-    SET_FLAG_FOR_TEST(flags::disable_synthetic_vsync_for_performance, true);
     SET_FLAG_FOR_TEST(flags::pacesetter_selection, true);
 
     const auto displayIdOpt = asPhysicalDisplayId(Case::Display::DISPLAY_ID::get());
