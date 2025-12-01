@@ -878,43 +878,13 @@ void SurfaceFlinger::bootFinished() {
 }
 
 bool shouldUseGraphiteIfSupported() {
-    return FlagManager::getInstance().graphite_renderengine() ||
-            (FlagManager::getInstance().graphite_renderengine_preview_rollout() &&
-             base::GetBoolProperty(PROPERTY_DEBUG_RENDERENGINE_GRAPHITE_PREVIEW_OPTIN, false)) ||
-            (FlagManager::getInstance().graphite_renderengine_desktop_rollout() &&
-             base::GetBoolProperty(PROPERTY_DEBUG_RENDERENGINE_GRAPHITE_DESKTOP_OPTIN, false));
+    return true;
 }
 
 void chooseRenderEngineType(renderengine::RenderEngineCreationArgs::Builder& builder) {
-    char prop[PROPERTY_VALUE_MAX];
-    property_get(PROPERTY_DEBUG_RENDERENGINE_BACKEND, prop, "");
-
-    // TODO: b/293371537 - Once GraphiteVk is deemed relatively stable, log a warning that
-    // PROPERTY_DEBUG_RENDERENGINE_BACKEND is deprecated
-    if (strcmp(prop, "skiagl") == 0) {
-        builder.setThreaded(renderengine::RenderEngine::Threaded::No)
-                .setGraphicsApi(renderengine::RenderEngine::GraphicsApi::GL);
-    } else if (strcmp(prop, "skiaglthreaded") == 0) {
-        builder.setThreaded(renderengine::RenderEngine::Threaded::Yes)
-                .setGraphicsApi(renderengine::RenderEngine::GraphicsApi::GL);
-    } else if (strcmp(prop, "skiavk") == 0) {
-        builder.setThreaded(renderengine::RenderEngine::Threaded::No)
-                .setGraphicsApi(renderengine::RenderEngine::GraphicsApi::Vk);
-    } else if (strcmp(prop, "skiavkthreaded") == 0) {
-        builder.setThreaded(renderengine::RenderEngine::Threaded::Yes)
-                .setGraphicsApi(renderengine::RenderEngine::GraphicsApi::Vk);
-    } else {
-        const auto kVulkan = renderengine::RenderEngine::GraphicsApi::Vk;
-        const bool useGraphite =
-                shouldUseGraphiteIfSupported() && renderengine::RenderEngine::canSupport(kVulkan);
-        const bool useVulkan = useGraphite ||
-                (FlagManager::getInstance().vulkan_renderengine() &&
-                 renderengine::RenderEngine::canSupport(kVulkan));
-
-        builder.setSkiaBackend(useGraphite ? renderengine::RenderEngine::SkiaBackend::Graphite
-                                           : renderengine::RenderEngine::SkiaBackend::Ganesh);
-        builder.setGraphicsApi(useVulkan ? kVulkan : renderengine::RenderEngine::GraphicsApi::GL);
-    }
+    const auto kVulkan = renderengine::RenderEngine::GraphicsApi::Vk;
+    builder.setSkiaBackend(renderengine::RenderEngine::SkiaBackend::Graphite);
+    builder.setGraphicsApi(kVulkan);
 }
 
 /**
