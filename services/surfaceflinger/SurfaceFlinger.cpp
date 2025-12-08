@@ -124,6 +124,8 @@
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
+#include <fstream>
+#include <iostream>
 
 #include <common/FlagManager.h>
 #include <common/LayerFilter.h>
@@ -1400,9 +1402,33 @@ status_t SurfaceFlinger::getDisplayStats(const sp<IBinder>& displayToken,
     return NO_ERROR;
 }
 
+void writeToSysfs(int value) {
+    const char* path = "/sys/kernel/fps_listener/rate";
+
+    // Use low-level C file I/O for better error reporting than ofstream
+    int fd = open(path, O_WRONLY);
+    if (fd < 0) {
+        ALOGE("UniversalFPS: Failed to open %s. Error: %s (%d)", path, strerror(errno), errno);
+        return;
+    }
+
+    std::string valStr = std::to_string(value);
+    ssize_t bytes = write(fd, valStr.c_str(), valStr.length());
+
+    if (bytes < 0) {
+        ALOGE("UniversalFPS: Failed to write '%d' to %s. Error: %s", value, path, strerror(errno));
+    } else {
+        ALOGD("UniversalFPS: Successfully wrote '%d' to kernel", value);
+    }
+
+    close(fd);
+}
+
 void SurfaceFlinger::setDesiredMode(display::DisplayModeRequest desiredMode) {
     const auto mode = desiredMode.mode;
     const auto displayId = mode.modePtr->getPhysicalDisplayId();
+
+    writeToSysfs(static_cast<int>(std::round(mode.fps.getValue())));
 
     SFTRACE_NAME(ftl::Concat(__func__, ' ', displayId.value).c_str());
 
@@ -3975,6 +4001,34 @@ std::pair<DisplayModes, DisplayModePtr> SurfaceFlinger::loadDisplayModes(
                                      .build());
     }
 
+    const auto* baseModePair = std::min_element(newModes.begin(), newModes.end(),
+                                                [](const auto& a, const auto& b) {
+                                                    return a.second->getVsyncRate().getValue() < b.second->getVsyncRate().getValue();
+                                                });
+
+    DisplayModePtr baseModePtr = baseModePair->second;
+
+    // Check if the base mode is roughly 60Hz or higher
+    if (baseModePtr->getVsyncRate().getValue() >= 59.0f) {
+        // 2. Inject 1Hz to 59Hz
+        for (int i = 1; i <= 59; i++) {
+            const auto id = nextModeId++;
+
+            // Use baseModePtr-> instead of baseMode.
+            newModes.try_emplace(id,
+                                 DisplayMode::Builder(baseModePtr->getHwcId())
+                                 .setId(id)
+                                 .setPhysicalDisplayId(displayId)
+                                 .setResolution(baseModePtr->getResolution())
+                                 .setVsyncPeriod(1000000000 / i)
+                                 .setVrrConfig(baseModePtr->getVrrConfig())
+                                 .setDpiX(baseModePtr->getDpi().x)
+                                 .setDpiY(baseModePtr->getDpi().y)
+                                 .setGroup(baseModePtr->getGroup())
+                                 .setHdrOutputType(baseModePtr->getHdrOutputType())
+                                 .build());
+        }
+    }
     const bool sameModes =
             std::equal(newModes.begin(), newModes.end(), oldModes.begin(), oldModes.end(),
                        [](const auto& lhs, const auto& rhs) {

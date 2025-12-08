@@ -71,7 +71,7 @@ public:
 #ifdef FRAME_RATE_CATEGORY_MIN
     static constexpr Fps kMinSupportedFrameRate = intToFps(FRAME_RATE_CATEGORY_MIN);
 #else
-    static constexpr Fps kMinSupportedFrameRate = 20_Hz;
+    static constexpr Fps kMinSupportedFrameRate = 1_Hz;
 #endif
 
     // Start range for FrameRateCategory Normal and High.

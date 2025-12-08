@@ -285,6 +285,13 @@ auto RefreshRateSelector::createFrameRateModes(
         if (!filterModes(*mode)) {
             continue;
         }
+
+        if (mode->getVsyncRate().getValue() < 60.0f) {
+            // Treat this as a valid mode directly without divisor calculation logic
+            ratesMap.try_emplace(Key{mode->getPeakFps(), mode->getGroup()}, it);
+            continue;
+        }
+
         const auto vsyncRate = mode->getVsyncRate();
         const auto peakFps = mode->getPeakFps();
         const auto divisors = getModeDivisors(*mode, renderRange, kFpsAnchorList, kNumFrameRates,
