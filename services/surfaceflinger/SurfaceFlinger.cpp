@@ -1403,12 +1403,22 @@ status_t SurfaceFlinger::getDisplayStats(const sp<IBinder>& displayToken,
 }
 
 void writeToSysfs(int value) {
+    static int lastValue = -1;
+    if (value == lastValue) {
+        return;
+    }
+
     const char* path = "/sys/kernel/fps_listener/rate";
 
     // Use low-level C file I/O for better error reporting than ofstream
     int fd = open(path, O_WRONLY);
     if (fd < 0) {
-        ALOGE("UniversalFPS: Failed to open %s. Error: %s (%d)", path, strerror(errno), errno);
+        // Prevent log spam if the file doesn't exist
+        static bool loggedError = false;
+        if (!loggedError) {
+            ALOGE("UniversalFPS: Failed to open %s. Error: %s (%d)", path, strerror(errno), errno);
+            loggedError = true;
+        }
         return;
     }
 
@@ -1418,7 +1428,8 @@ void writeToSysfs(int value) {
     if (bytes < 0) {
         ALOGE("UniversalFPS: Failed to write '%d' to %s. Error: %s", value, path, strerror(errno));
     } else {
-        ALOGD("UniversalFPS: Successfully wrote '%d' to kernel", value);
+        // ALOGD("UniversalFPS: Successfully wrote '%d' to kernel", value);
+        lastValue = value;
     }
 
     close(fd);
@@ -1427,8 +1438,6 @@ void writeToSysfs(int value) {
 void SurfaceFlinger::setDesiredMode(display::DisplayModeRequest desiredMode) {
     const auto mode = desiredMode.mode;
     const auto displayId = mode.modePtr->getPhysicalDisplayId();
-
-    writeToSysfs(static_cast<int>(std::round(mode.fps.getValue())));
 
     SFTRACE_NAME(ftl::Concat(__func__, ' ', displayId.value).c_str());
 
@@ -3010,6 +3019,7 @@ bool SurfaceFlinger::commit(PhysicalDisplayId pacesetterId,
 
     updateCursorAsync();
     if (!mustComposite) {
+        writeToSysfs(1);
         updateInputFlinger(vsyncId, pacesetterFrameTarget.frameBeginTime());
     }
     doActiveLayersTracingIfNeeded(false, mVisibleRegionsDirty,
@@ -3190,6 +3200,30 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
     const auto layers = addLayerSnapshotsToCompositionArgs(mainThreadRefreshArgs, kCursorOnly);
 
     prepareLayersForComposition(mainThreadRefreshArgs, kCursorOnly, layers);
+
+    const auto display = FTL_FAKE_GUARD(mStateLock, getDisplayDeviceLocked(pacesetterId));
+    if (display) {
+        float totalDamageArea = 0.0f;
+
+        // Sum up the area of layers that have changed content
+        for (const auto& [layer, layerFE] : layers) {
+            if (layerFE->mSnapshot->contentDirty) {
+                // Use the bounds of the layer to estimate damage
+                const auto& bounds = layerFE->mSnapshot->geomLayerBounds;
+                totalDamageArea += (bounds.getWidth() * bounds.getHeight());
+            }
+        }
+
+        const float displayArea = (float)(display->getWidth() * display->getHeight());
+        const int realFps = static_cast<int>(std::round(display->refreshRateSelector().getActiveMode().fps.getValue()));
+
+        // Threshold: If less than 20% of the screen is updating, consider it a tiny animation
+        if (displayArea > 0 && (totalDamageArea / displayArea) < 0.2f) {
+            writeToSysfs(30);
+        } else {
+            writeToSysfs(realFps);
+        }
+    }
 
     for (auto& [layer, layerFE] : layers) {
         validateForReadback(layerFE);
