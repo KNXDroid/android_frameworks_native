@@ -835,18 +835,56 @@ void SurfaceFlinger::bootFinished() {
 }
 
 bool shouldUseGraphiteIfCompiledAndSupported() {
-    return true;
+    return FlagManager::getInstance().graphite_renderengine() ||
+            (FlagManager::getInstance().graphite_renderengine_preview_rollout() &&
+             base::GetBoolProperty(PROPERTY_DEBUG_RENDERENGINE_GRAPHITE_PREVIEW_OPTIN, false));
 }
 
 void chooseRenderEngineType(renderengine::RenderEngineCreationArgs::Builder& builder) {
     char prop[PROPERTY_VALUE_MAX];
     property_get(PROPERTY_DEBUG_RENDERENGINE_BACKEND, prop, "");
-    const auto kVulkan = renderengine::RenderEngine::GraphicsApi::VK;
-    const bool useVulkan = true;
 
-    builder.setSkiaBackend(renderengine::RenderEngine::SkiaBackend::GRAPHITE);
-    builder.setThreaded(renderengine::RenderEngine::Threaded::YES)
-            .setGraphicsApi(useVulkan ? kVulkan : renderengine::RenderEngine::GraphicsApi::GL);
+    // TODO: b/293371537 - Once GraphiteVk is deemed relatively stable, log a warning that
+    // PROPERTY_DEBUG_RENDERENGINE_BACKEND is deprecated
+    if (strcmp(prop, "skiagl") == 0) {
+        builder.setThreaded(renderengine::RenderEngine::Threaded::NO)
+                .setGraphicsApi(renderengine::RenderEngine::GraphicsApi::GL);
+    } else if (strcmp(prop, "skiaglthreaded") == 0) {
+        builder.setThreaded(renderengine::RenderEngine::Threaded::YES)
+                .setGraphicsApi(renderengine::RenderEngine::GraphicsApi::GL);
+    } else if (strcmp(prop, "skiavk") == 0) {
+        builder.setThreaded(renderengine::RenderEngine::Threaded::NO)
+                .setGraphicsApi(renderengine::RenderEngine::GraphicsApi::VK);
+    } else if (strcmp(prop, "skiavkthreaded") == 0) {
+        builder.setThreaded(renderengine::RenderEngine::Threaded::YES)
+                .setGraphicsApi(renderengine::RenderEngine::GraphicsApi::VK);
+    } else {
+        const auto kVulkan = renderengine::RenderEngine::GraphicsApi::VK;
+// TODO: b/341728634 - Clean up conditional compilation.
+// Note: this guard in particular must check e.g.
+// COM_ANDROID_GRAPHICS_SURFACEFLINGER_FLAGS_GRAPHITE_RENDERENGINE directly (instead of calling e.g.
+// COM_ANDROID_GRAPHICS_SURFACEFLINGER_FLAGS(GRAPHITE_RENDERENGINE)) because that macro is undefined
+// in the libsurfaceflingerflags_test variant of com_android_graphics_surfaceflinger_flags.h, which
+// is used by layertracegenerator (which also needs SurfaceFlinger.cpp). :)
+#if COM_ANDROID_GRAPHICS_SURFACEFLINGER_FLAGS_GRAPHITE_RENDERENGINE || \
+        COM_ANDROID_GRAPHICS_SURFACEFLINGER_FLAGS_FORCE_COMPILE_GRAPHITE_RENDERENGINE
+        const bool useGraphite = shouldUseGraphiteIfCompiledAndSupported() &&
+                renderengine::RenderEngine::canSupport(kVulkan);
+#else
+        const bool useGraphite = false;
+        if (shouldUseGraphiteIfCompiledAndSupported()) {
+            ALOGE("RenderEngine's Graphite Skia backend was requested, but it is not compiled in "
+                  "this build! Falling back to Ganesh backend selection logic.");
+        }
+#endif
+        const bool useVulkan = useGraphite ||
+                (FlagManager::getInstance().vulkan_renderengine() &&
+                 renderengine::RenderEngine::canSupport(kVulkan));
+
+        builder.setSkiaBackend(useGraphite ? renderengine::RenderEngine::SkiaBackend::GRAPHITE
+                                           : renderengine::RenderEngine::SkiaBackend::GANESH);
+        builder.setGraphicsApi(useVulkan ? kVulkan : renderengine::RenderEngine::GraphicsApi::GL);
+    }
 }
 
 /**
